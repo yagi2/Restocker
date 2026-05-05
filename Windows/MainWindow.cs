@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
@@ -16,7 +17,7 @@ public sealed class MainWindow : Window, IDisposable
         this.configuration = configuration;
         SizeConstraints = new WindowSizeConstraints
         {
-            MinimumSize = new Vector2(640, 360),
+            MinimumSize = new Vector2(720, 420),
             MaximumSize = new Vector2(2400, 1600),
         };
     }
@@ -25,11 +26,65 @@ public sealed class MainWindow : Window, IDisposable
 
     public override void Draw()
     {
-        ImGui.TextUnformatted("Restocker — リテイナーマーケット一括操作");
+        DrawHeader();
         ImGui.Separator();
-        ImGui.TextDisabled("MVP 雛形。次コミット以降で UI を肉付けする。");
 
-        ImGui.Spacing();
-        ImGui.TextUnformatted($"Snapshots: {configuration.Snapshots.Count} 件キャッシュ済み");
+        if (ImGui.BeginTabBar("##restocker-tabs"))
+        {
+            if (ImGui.BeginTabItem("リプライス"))
+            {
+                DrawRepriceTabPlaceholder();
+                ImGui.EndTabItem();
+            }
+            if (ImGui.BeginTabItem("新規出品"))
+            {
+                DrawListTabPlaceholder();
+                ImGui.EndTabItem();
+            }
+            if (ImGui.BeginTabItem("設定"))
+            {
+                DrawSettingsTab();
+                ImGui.EndTabItem();
+            }
+            ImGui.EndTabBar();
+        }
+    }
+
+    private void DrawHeader()
+    {
+        var snapshots = configuration.Snapshots.Values.ToList();
+        var freshest = snapshots.Count == 0
+            ? "未取得"
+            : snapshots.Max(s => s.LastRefreshedUtc).ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+
+        ImGui.TextUnformatted($"キャッシュ: {snapshots.Count} リテイナー / 最終更新 {freshest}");
+        ImGui.SameLine();
+        ImGui.BeginDisabled();
+        ImGui.SmallButton("全リテイナー更新（未実装）");
+        ImGui.EndDisabled();
+    }
+
+    private void DrawRepriceTabPlaceholder()
+    {
+        ImGui.TextDisabled("リプライス画面は次コミット以降で実装。");
+        var totalListings = configuration.Snapshots.Values.Sum(s => s.Listings.Count);
+        ImGui.TextUnformatted($"集計（参考）: 出品中 {totalListings} 件");
+    }
+
+    private void DrawListTabPlaceholder()
+    {
+        ImGui.TextDisabled("新規分割出品画面は次コミット以降で実装。");
+        var totalInv = configuration.Snapshots.Values.Sum(s => s.Inventory.Count);
+        ImGui.TextUnformatted($"集計（参考）: インベントリ品 {totalInv} 件");
+    }
+
+    private void DrawSettingsTab()
+    {
+        var autoOpen = configuration.AutoOpenOnBell;
+        if (ImGui.Checkbox("リテイナーベル展開時にウィンドウを自動表示", ref autoOpen))
+        {
+            configuration.AutoOpenOnBell = autoOpen;
+            configuration.Save();
+        }
     }
 }

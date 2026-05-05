@@ -32,6 +32,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private MainWindow MainWindow { get; }
     private RetainerWatcher RetainerWatcher { get; }
+    private BellWatcher BellWatcher { get; }
 
     public Plugin()
     {
@@ -49,6 +50,13 @@ public sealed class Plugin : IDalamudPlugin
             Log
         );
 
+        BellWatcher = new BellWatcher(
+            Framework,
+            GameGui,
+            open => MainWindow.IsOpen = open,
+            () => Configuration.AutoOpenOnBell
+        );
+
         CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
             HelpMessage = "Open the Restocker window."
@@ -64,6 +72,7 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.OpenMainUi -= ToggleMainUi;
 
         WindowSystem.RemoveAllWindows();
+        BellWatcher.Dispose();
         RetainerWatcher.Dispose();
         MainWindow.Dispose();
 
