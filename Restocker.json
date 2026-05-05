@@ -1,0 +1,18 @@
+{
+  "Author": "yagi2",
+  "Name": "Restocker",
+  "Punchline": "Bulk reprice and split-list retainer market listings across all retainers.",
+  "Description": "Cross-retainer market workbench. Reprice every listing in one table (per item, with optional drill-down to per-listing). Bulk-list inventory items at a single price, automatically splitting into max-stack listings (e.g. 990 × stack 99 → 99 × 10 listings). Walks all retainers via its own bell state machine; no AutoRetainer required (a toast warns if AR is running concurrently). Active 'refresh all retainers' button to repopulate cached snapshots, plus 'match lowest -1 gil' market lookup with per-item request deduplication.",
+  "ApplicableVersion": "any",
+  "Tags": [
+    "retainer",
+    "market",
+    "marketboard",
+    "bulk",
+    "reprice",
+    "list"
+  ],
+  "RepoUrl": "https://github.com/yagi2/Restocker",
+  "IconUrl": "https://raw.githubusercontent.com/yagi2/Restocker/main/images/icon.png",
+  "Changelog": "0.1.0.0 — Initial release."
+}
