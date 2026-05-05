@@ -34,6 +34,7 @@ public sealed class Plugin : IDalamudPlugin
     private MainWindow MainWindow { get; }
     private RetainerWatcher RetainerWatcher { get; }
     private BellWatcher BellWatcher { get; }
+    private AutoRetainerDetector ArDetector { get; }
 
     public Plugin()
     {
@@ -58,6 +59,9 @@ public sealed class Plugin : IDalamudPlugin
             open => MainWindow.IsOpen = open,
             () => Configuration.AutoOpenOnBell
         );
+
+        ArDetector = new AutoRetainerDetector(PluginInterface, NotificationManager, Log);
+        ArDetector.WarnIfPresent();
 
         CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
