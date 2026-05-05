@@ -22,6 +22,8 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IAddonLifecycle AddonLifecycle { get; private set; } = null!;
     [PluginService] internal static IToastGui ToastGui { get; private set; } = null!;
     [PluginService] internal static INotificationManager NotificationManager { get; private set; } = null!;
+    [PluginService] internal static IPlayerState PlayerState { get; private set; } = null!;
+    [PluginService] internal static IObjectTable ObjectTable { get; private set; } = null!;
 
     private const string CommandName = "/restocker";
 
@@ -29,6 +31,7 @@ public sealed class Plugin : IDalamudPlugin
     public readonly WindowSystem WindowSystem = new("Restocker");
 
     private MainWindow MainWindow { get; }
+    private RetainerWatcher RetainerWatcher { get; }
 
     public Plugin()
     {
@@ -36,6 +39,15 @@ public sealed class Plugin : IDalamudPlugin
 
         MainWindow = new MainWindow(Configuration);
         WindowSystem.AddWindow(MainWindow);
+
+        RetainerWatcher = new RetainerWatcher(
+            Configuration,
+            AddonLifecycle,
+            PlayerState,
+            ObjectTable,
+            DataManager,
+            Log
+        );
 
         CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
@@ -52,6 +64,7 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.OpenMainUi -= ToggleMainUi;
 
         WindowSystem.RemoveAllWindows();
+        RetainerWatcher.Dispose();
         MainWindow.Dispose();
 
         CommandManager.RemoveHandler(CommandName);
