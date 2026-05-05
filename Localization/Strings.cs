@@ -123,6 +123,30 @@ public static class Strings
     public static string PlanOverflow => T("{0} qty cannot fit", "※{0}個 余り", "{0} überzählig", "{0} en surplus", "余 {0} 个", "{0}개 초과");
     public static string ListSummary => T("To list: {0} item type(s)", "出品予定: {0} アイテム種", "Einzustellen: {0} Artikelart(en)", "À mettre en vente : {0} type(s)", "待上架：{0} 种物品", "등록 예정: {0} 종");
 
+    // Confirm dialog
+    public static string ConfirmTitle => T(
+        "About to apply {0} actions across {1} retainer(s).",
+        "{0} 件のアクションを {1} リテイナーに適用しようとしています。",
+        "Wende {0} Aktionen auf {1} Gehilfen an.",
+        "Sur le point d'appliquer {0} actions à {1} intendant(s).",
+        "即将对 {1} 名雇员执行 {0} 个操作。",
+        "{1}명의 리테이너에 {0}개 작업을 적용합니다.");
+    public static string ConfirmBreakdown => T(
+        "Reprice: {0} / New listings: {1}",
+        "リプライス: {0} 件 / 新規出品: {1} 件",
+        "Preis ändern: {0} / Neu einstellen: {1}",
+        "Reprix : {0} / Nouvelles mises : {1}",
+        "重新定价：{0} / 新上架：{1}",
+        "재가격: {0} / 신규 등록: {1}");
+    public static string ConfirmEta => T(
+        "Estimated time: ~{0}s (each retainer ~5s overhead, ~3s per action)",
+        "推定時間: 約 {0}秒（リテイナーごと約5秒、アクションごと約3秒）",
+        "Geschätzt: ~{0}s",
+        "Durée estimée : ~{0}s",
+        "预计耗时：约 {0} 秒",
+        "예상 시간: 약 {0}초");
+    public static string ConfirmStart => T("Start", "開始", "Starten", "Démarrer", "开始", "시작");
+
     // Settings tab
     public static string SettingsAutoOpenOnBell => T(
         "Auto-show window when retainer bell is open",

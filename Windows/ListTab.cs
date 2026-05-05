@@ -18,15 +18,17 @@ public sealed class ListTab
 {
     private readonly Configuration configuration;
     private readonly Executor executor;
+    private readonly ConfirmDialog confirmDialog;
     private string filter = string.Empty;
     private bool listableOnly = true;
     /// <summary>編集中の価格。キーは "{sourceKey}#{itemId}.{hq}"。</summary>
     private readonly Dictionary<string, long> editedPrice = new();
 
-    public ListTab(Configuration configuration, Executor executor)
+    public ListTab(Configuration configuration, Executor executor, ConfirmDialog confirmDialog)
     {
         this.configuration = configuration;
         this.executor = executor;
+        this.confirmDialog = confirmDialog;
     }
 
     public void Draw()
@@ -58,7 +60,7 @@ public sealed class ListTab
         if (disabled) ImGui.BeginDisabled();
         if (ImGui.Button(string.Format(Strings.ApplyWithCount, Strings.Apply, actions.Count)))
         {
-            executor.StartApplyActions(actions);
+            confirmDialog.Request(actions, executor.StartApplyActions);
         }
         if (disabled) ImGui.EndDisabled();
 

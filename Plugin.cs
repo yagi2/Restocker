@@ -29,7 +29,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private const string CommandName = "/restocker";
 
-    public Configuration Configuration { get; }
+    public static Configuration Configuration { get; private set; } = null!;
     public readonly WindowSystem WindowSystem = new("Restocker");
 
     private MainWindow MainWindow { get; }

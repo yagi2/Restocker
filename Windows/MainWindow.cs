@@ -15,6 +15,7 @@ public sealed class MainWindow : Window, IDisposable
     private readonly Executor executor;
     private readonly RepriceTab repriceTab;
     private readonly ListTab listTab;
+    private readonly ConfirmDialog confirmDialog = new();
 
     public MainWindow(Configuration configuration, Executor executor)
         : base($"{Strings.WindowTitle}##MainWindow",
@@ -22,8 +23,8 @@ public sealed class MainWindow : Window, IDisposable
     {
         this.configuration = configuration;
         this.executor = executor;
-        this.repriceTab = new RepriceTab(configuration, executor);
-        this.listTab = new ListTab(configuration, executor);
+        this.repriceTab = new RepriceTab(configuration, executor, confirmDialog);
+        this.listTab = new ListTab(configuration, executor, confirmDialog);
         SizeConstraints = new WindowSizeConstraints
         {
             MinimumSize = new Vector2(720, 420),
@@ -35,6 +36,7 @@ public sealed class MainWindow : Window, IDisposable
 
     public override void Draw()
     {
+        confirmDialog.Draw();
         DrawHeader();
         ImGui.Separator();
 

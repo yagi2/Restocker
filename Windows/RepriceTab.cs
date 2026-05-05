@@ -17,14 +17,16 @@ public sealed class RepriceTab
 {
     private readonly Configuration configuration;
     private readonly Executor executor;
+    private readonly ConfirmDialog confirmDialog;
     private string filter = string.Empty;
     /// <summary>編集中の新価格。キーは "{retainerKey}#{listingIndex}"。</summary>
     private readonly Dictionary<string, long> editedPrice = new();
 
-    public RepriceTab(Configuration configuration, Executor executor)
+    public RepriceTab(Configuration configuration, Executor executor, ConfirmDialog confirmDialog)
     {
         this.configuration = configuration;
         this.executor = executor;
+        this.confirmDialog = confirmDialog;
     }
 
     public void Draw()
@@ -58,7 +60,7 @@ public sealed class RepriceTab
         if (disabled) ImGui.BeginDisabled();
         if (ImGui.Button(string.Format(Strings.ApplyWithCount, Strings.Apply, actions.Count)))
         {
-            executor.StartApplyActions(actions);
+            confirmDialog.Request(actions, executor.StartApplyActions);
         }
         if (disabled) ImGui.EndDisabled();
 
