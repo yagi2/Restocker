@@ -1,46 +1,118 @@
+using System;
 using Lumina.Excel.Sheets;
 
 namespace Restocker.Common;
 
 /// <summary>
-/// Lumina の Addon シートからゲーム内表示文字列を引いて、ゲーム言語に追従したマッチングに使う。
-/// 既知の row id は AutoRetainer / 各種プラグインで実証済みのもの。
+/// SelectString のリテイナーメニュー項目を **substring 一致のセット** で識別する。
+///
+/// FFXIV アップデートで Lumina の Addon row 値とゲーム内表示テキストが一致
+/// しなくなる事故が稀にある（実例: 5480 が「アイテム売却を依頼する」だった
+/// ものが「マーケット出品（リテイナー所持品から）」に差し替わるケース）。
+/// row id ベースの完全一致だと巡回が止まるため、各言語の安定して残りそうな
+/// 部分文字列のリストで照合する。
 /// </summary>
 public static class AddonText
 {
-    private static string? cacheHaveRetainerSellItems;
-    private static string? cacheQuit;
-    private static string? cacheEntrustOrWithdrawItems;
-    private static string? cacheEntrustToRetainer;
-    private static string? cachePutUpForSale;
-
-    /// <summary>Addon row 5480: 「(リテイナーに) マーケットへの出品を任せる」系のテキスト。</summary>
-    public static string HaveRetainerSellItems
-        => cacheHaveRetainerSellItems ??= ResolveRow(5480, "Have Retainer Sell Items");
-
-    /// <summary>Addon row 2383: SelectString の「終了する」エントリ。</summary>
-    public static string Quit => cacheQuit ??= ResolveRow(2383, "Quit");
-
-    /// <summary>Addon row 2378: 「アイテムを預ける／引き出す」エントリ。</summary>
-    public static string EntrustOrWithdrawItems
-        => cacheEntrustOrWithdrawItems ??= ResolveRow(2378, "Entrust or withdraw items.");
-
-    /// <summary>Addon row 97: 右クリックメニューの「リテイナーに預ける」。</summary>
-    public static string EntrustToRetainer
-        => cacheEntrustToRetainer ??= ResolveRow(97, "Entrust to Retainer");
-
-    /// <summary>Addon row 99: 右クリックメニューの「マーケットに出品する」。</summary>
-    public static string PutUpForSale
-        => cachePutUpForSale ??= ResolveRow(99, "Put Up for Sale");
-
-    private static string ResolveRow(uint rowId, string fallback)
+    /// <summary>
+    /// 「リテイナー所持品から」マーケット出品 — refresh-all で SellList を開く時に使う項目。
+    /// </summary>
+    public static bool IsHaveRetainerSellItemsEntry(string entryText)
     {
-        var sheet = Plugin.DataManager.GetExcelSheet<Addon>();
-        if (sheet.TryGetRow(rowId, out var row))
+        if (string.IsNullOrEmpty(entryText)) return false;
+
+        // JP 新表記: 「マーケット出品（リテイナー所持品から）」
+        if (entryText.Contains("リテイナー所持品", StringComparison.Ordinal)) return true;
+        // JP 旧表記: 「アイテム売却を依頼する」
+        if (entryText.Contains("アイテム売却", StringComparison.Ordinal)) return true;
+        // EN 新表記: "List items on the market (retainer's inventory)" 系
+        if (entryText.Contains("retainer's inventory", StringComparison.OrdinalIgnoreCase)) return true;
+        if (entryText.Contains("retainer inventory", StringComparison.OrdinalIgnoreCase)) return true;
+        // EN 旧表記: "Have Retainer Sell Items"
+        if (entryText.Contains("Sell Items", StringComparison.OrdinalIgnoreCase)) return true;
+        if (entryText.Contains("Retainer Sell", StringComparison.OrdinalIgnoreCase)) return true;
+        // DE: 「Verkaufsangebote des Gehilfen ändern」「auf dem Markt verkaufen」系
+        if (entryText.Contains("Verkaufsangebote", StringComparison.OrdinalIgnoreCase)) return true;
+        if (entryText.Contains("auf dem Markt", StringComparison.OrdinalIgnoreCase) &&
+            entryText.Contains("Gehilfen", StringComparison.OrdinalIgnoreCase)) return true;
+        // FR: "vendre sur le marché" + "intendant" / "marchandises"
+        if (entryText.Contains("vendre sur le marché", StringComparison.OrdinalIgnoreCase) &&
+            (entryText.Contains("intendant", StringComparison.OrdinalIgnoreCase) ||
+             entryText.Contains("marchandises", StringComparison.OrdinalIgnoreCase))) return true;
+        // ZH 簡体: 「市场上架」+ 雇员 / 物品
+        if (entryText.Contains("市场上架") && entryText.Contains("雇员")) return true;
+        if (entryText.Contains("出售物品") && entryText.Contains("雇员")) return true;
+        // KO: 「시장 등록」 + 리테이너
+        if (entryText.Contains("시장 등록") && entryText.Contains("리테이너")) return true;
+        // 互換: Lumina row 5480 が現在指してる文字列とも一致しておく
+        var legacy = LegacySellItemsRow.Value;
+        if (!string.IsNullOrEmpty(legacy) && entryText.Contains(legacy, StringComparison.Ordinal)) return true;
+
+        return false;
+    }
+
+    /// <summary>「終了する／リテイナーを帰す」系の項目。</summary>
+    public static bool IsQuitEntry(string entryText)
+    {
+        if (string.IsNullOrEmpty(entryText)) return false;
+
+        // JP: 「リテイナーを帰す」「終了する」
+        if (entryText.Contains("帰す", StringComparison.Ordinal)) return true;
+        if (entryText.StartsWith("終了", StringComparison.Ordinal)) return true;
+        // EN: "Dismiss retainer", "Quit"
+        if (entryText.StartsWith("Dismiss", StringComparison.OrdinalIgnoreCase)) return true;
+        if (entryText.Equals("Quit", StringComparison.OrdinalIgnoreCase)) return true;
+        if (entryText.Equals("Quit.", StringComparison.OrdinalIgnoreCase)) return true;
+        // DE: "Beenden" / "Verlassen"
+        if (entryText.StartsWith("Beenden", StringComparison.OrdinalIgnoreCase)) return true;
+        if (entryText.StartsWith("Verlassen", StringComparison.OrdinalIgnoreCase)) return true;
+        // FR: "Quitter"
+        if (entryText.StartsWith("Quitter", StringComparison.OrdinalIgnoreCase)) return true;
+        // ZH: 「退出」「结束」
+        if (entryText.Contains("退出")) return true;
+        if (entryText.Contains("结束")) return true;
+        // KO: 「종료」「돌려보내기」
+        if (entryText.Contains("종료")) return true;
+        if (entryText.Contains("돌려보내")) return true;
+
+        var legacy = LegacyQuitRow.Value;
+        if (!string.IsNullOrEmpty(legacy) && entryText.Equals(legacy, StringComparison.Ordinal)) return true;
+
+        return false;
+    }
+
+    /// <summary>右クリックメニューの「マーケットに出品する」系。Addon row 99 ベース + 多言語ハードコード。</summary>
+    public static bool IsPutUpForSaleEntry(string entryText)
+    {
+        if (string.IsNullOrEmpty(entryText)) return false;
+        if (entryText.Contains("マーケットに出品") || entryText.Contains("マーケット出品")) return true;
+        if (entryText.Contains("出品", StringComparison.Ordinal) && !entryText.Contains("販売履歴")) return true;
+        if (entryText.Contains("Put Up for Sale", StringComparison.OrdinalIgnoreCase)) return true;
+        if (entryText.Contains("Sell on Market", StringComparison.OrdinalIgnoreCase)) return true;
+        if (entryText.Contains("Auf dem Markt anbieten", StringComparison.OrdinalIgnoreCase)) return true;
+        if (entryText.Contains("Mettre en vente", StringComparison.OrdinalIgnoreCase)) return true;
+        if (entryText.Contains("市场出售") || entryText.Contains("市场上架")) return true;
+        if (entryText.Contains("시장에 등록") || entryText.Contains("시장 등록")) return true;
+        var legacy = LegacyPutUpForSaleRow.Value;
+        if (!string.IsNullOrEmpty(legacy) && entryText.Contains(legacy, StringComparison.Ordinal)) return true;
+        return false;
+    }
+
+    private static readonly Lazy<string> LegacySellItemsRow = new(() => SafeRowText(5480));
+    private static readonly Lazy<string> LegacyQuitRow = new(() => SafeRowText(2383));
+    private static readonly Lazy<string> LegacyPutUpForSaleRow = new(() => SafeRowText(99));
+
+    private static string SafeRowText(uint rowId)
+    {
+        try
         {
-            var text = row.Text.ExtractText();
-            if (!string.IsNullOrEmpty(text)) return text;
+            var sheet = Plugin.DataManager.GetExcelSheet<Addon>();
+            if (sheet.TryGetRow(rowId, out var row))
+            {
+                return row.Text.ExtractText() ?? string.Empty;
+            }
         }
-        return fallback;
+        catch { }
+        return string.Empty;
     }
 }

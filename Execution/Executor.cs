@@ -199,7 +199,7 @@ public sealed unsafe class Executor : IDisposable
         if (!AddonHelper.IsOpen("SelectString")) { waitingSince = null; return; }
         if (waitingSince == null) waitingSince = DateTime.UtcNow;
 
-        if (SelectStringHelper.HasEntry(AddonText.HaveRetainerSellItems))
+        if (SelectStringHelper.HasEntry(AddonText.IsHaveRetainerSellItemsEntry))
         {
             waitingSince = null;
             State = ExecutionState.OpeningSellList;
@@ -210,14 +210,14 @@ public sealed unsafe class Executor : IDisposable
         if (DateTime.UtcNow - waitingSince.Value > SelectStringTimeout)
         {
             var entries = SelectStringHelper.EnumerateEntries();
-            log.Warning($"[Restocker] SelectString did not contain '{AddonText.HaveRetainerSellItems}' (Addon row 5480). Entries seen: {string.Join(" | ", entries)}");
-            Stop($"sell-items entry not found in retainer menu (see /xllog for entries)");
+            log.Warning($"[Restocker] sell-items entry not found. Entries seen: {string.Join(" | ", entries)}");
+            Stop("sell-items entry not found in retainer menu (see /xllog for entries)");
         }
     }
 
     private void TickOpeningSellList()
     {
-        if (!SelectStringHelper.ClickEntryByText(AddonText.HaveRetainerSellItems)) return;
+        if (!SelectStringHelper.ClickEntry(AddonText.IsHaveRetainerSellItemsEntry)) return;
         State = ExecutionState.AwaitingSellList;
         Throttle();
     }
@@ -312,7 +312,7 @@ public sealed unsafe class Executor : IDisposable
 
     private void TickClickingPutUpForSale()
     {
-        if (!ContextMenuHelper.ClickEntryByText(AddonText.PutUpForSale)) return;
+        if (!ContextMenuHelper.ClickEntry(AddonText.IsPutUpForSaleEntry)) return;
         State = ExecutionState.AwaitingSellDialog;
         Throttle();
     }
@@ -432,7 +432,7 @@ public sealed unsafe class Executor : IDisposable
     {
         if (!AddonHelper.IsOpen("SelectString")) { waitingSince = null; return; }
         if (waitingSince == null) waitingSince = DateTime.UtcNow;
-        if (SelectStringHelper.HasEntry(AddonText.Quit))
+        if (SelectStringHelper.HasEntry(AddonText.IsQuitEntry))
         {
             waitingSince = null;
             State = ExecutionState.DismissingRetainer;
@@ -442,14 +442,14 @@ public sealed unsafe class Executor : IDisposable
         if (DateTime.UtcNow - waitingSince.Value > SelectStringTimeout)
         {
             var entries = SelectStringHelper.EnumerateEntries();
-            log.Warning($"[Restocker] SelectString did not contain '{AddonText.Quit}' (Addon row 2383). Entries seen: {string.Join(" | ", entries)}");
+            log.Warning($"[Restocker] quit entry not found. Entries seen: {string.Join(" | ", entries)}");
             Stop("quit entry not found in retainer menu");
         }
     }
 
     private void TickDismissingRetainer()
     {
-        if (!SelectStringHelper.ClickEntryByText(AddonText.Quit)) return;
+        if (!SelectStringHelper.ClickEntry(AddonText.IsQuitEntry)) return;
         State = ExecutionState.AwaitingDismissed;
         Throttle();
     }
