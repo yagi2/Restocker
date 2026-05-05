@@ -220,16 +220,18 @@ public sealed unsafe class Executor : IDisposable
                 Throttle();
                 return;
             case PlannedActionKind.NewListing:
-                // 出品元 slot を snapshot から検索 → AgentInventoryContext.OpenForItemSlot で
-                // 右クリック相当を発火 → ContextMenu の「マーケットに出品する」を click → RetainerSell へ
-                if (!OpenContextForNewListing(action))
+                // InventoryManager.MoveToRetainerMarket でコンテキストメニュー経由せず
+                // 任意のソース (リテイナーバッグ / キャラバッグ / サドル) から直接 1 件出品。
+                // RetainerSellList が開いている前提でゲーム側が処理してくれる。
+                if (!ExecuteDirectListing(action))
                 {
-                    log.Warning($"[Restocker] NewListing source slot not found for item={action.ItemId}, skipping");
-                    currentJobActions.Dequeue();
-                    Throttle();
-                    return;
+                    log.Warning($"[Restocker] NewListing direct move failed for item={action.ItemId} src={action.SourceKey}, skipping");
                 }
-                State = ExecutionState.AwaitingContextMenu;
+                else
+                {
+                    CompletedActions++;
+                }
+                currentJobActions.Dequeue();
                 Throttle();
                 return;
         }
@@ -279,38 +281,84 @@ public sealed unsafe class Executor : IDisposable
         Throttle();
     }
 
-    private bool OpenContextForNewListing(PlannedAction action)
+    /// <summary>
+    /// SourceKey に応じて適切な container を実機の InventoryManager から直接走査し
+    /// （snapshot は古い可能性があるため）、十分な qty のスロットを 1 つ見つけ、
+    /// MoveToRetainerMarket(src→RetainerMarketの空きスロット, qty, price) を呼ぶ。
+    /// </summary>
+    private bool ExecuteDirectListing(PlannedAction action)
     {
-        // 供給元: SourceKey が空 or RetainerKey と同じ → リテイナーの bag、
-        //          char.* で始まる → 現在ログイン中キャラの bag (Inventory1-4)
-        Data.InventoryEntry? match = null;
+        var im = FFXIVClientStructs.FFXIV.Client.Game.InventoryManager.Instance();
+        if (im == null) return false;
+
+        // 出品先の RetainerMarket で空きスロットを探す
+        var market = im->GetInventoryContainer(InventoryType.RetainerMarket);
+        if (market == null || !market->IsLoaded) return false;
+        var dstSlot = -1;
+        for (var i = 0; i < market->Size; i++)
+        {
+            var s = market->GetInventorySlot(i);
+            if (s == null) continue;
+            if (s->ItemId == 0) { dstSlot = i; break; }
+        }
+        if (dstSlot < 0) { log.Warning("[Restocker] no free RetainerMarket slot"); return false; }
+
+        // ソースの候補 container 順序: SourceKey によって決定
         var sourceKey = string.IsNullOrEmpty(action.SourceKey) ? action.RetainerKey : action.SourceKey;
+        var candidates = SourceContainersFor(sourceKey);
+
+        foreach (var t in candidates)
+        {
+            var c = im->GetInventoryContainer(t);
+            if (c == null || !c->IsLoaded) continue;
+            for (var i = 0; i < c->Size; i++)
+            {
+                var item = c->GetInventorySlot(i);
+                if (item == null || item->ItemId != action.ItemId) continue;
+                var hq = (item->Flags & FFXIVClientStructs.FFXIV.Client.Game.InventoryItem.ItemFlags.HighQuality) != 0;
+                if (hq != action.IsHQ) continue;
+                if (item->Quantity < action.Quantity) continue;
+
+                im->MoveToRetainerMarket(
+                    t, (ushort)i,
+                    InventoryType.RetainerMarket, (ushort)dstSlot,
+                    (uint)action.Quantity,
+                    (uint)Math.Min(action.UnitPrice, uint.MaxValue));
+                log.Debug($"[Restocker] MoveToRetainerMarket src={t}#{i} -> market#{dstSlot} qty={action.Quantity} price={action.UnitPrice}");
+                return true;
+            }
+        }
+
+        log.Warning($"[Restocker] no source slot with itemId={action.ItemId} hq={action.IsHQ} qty>={action.Quantity} in any of: {string.Join(",", candidates)}");
+        return false;
+    }
+
+    private static InventoryType[] SourceContainersFor(string sourceKey)
+    {
         if (sourceKey.StartsWith("char."))
         {
-            if (configuration.Characters.TryGetValue(sourceKey, out var ch))
+            if (sourceKey.EndsWith(".saddle"))
             {
-                match = ch.Bag.FirstOrDefault(e =>
-                    e.ItemId == action.ItemId && e.IsHQ == action.IsHQ && e.Quantity >= action.Quantity);
+                return new[]
+                {
+                    InventoryType.SaddleBag1, InventoryType.SaddleBag2,
+                    InventoryType.PremiumSaddleBag1, InventoryType.PremiumSaddleBag2,
+                };
             }
+            // .bag (or unspecified char.*) -> player main bag
+            return new[]
+            {
+                InventoryType.Inventory1, InventoryType.Inventory2,
+                InventoryType.Inventory3, InventoryType.Inventory4,
+            };
         }
-        else
+        // retainer source -> retainer's own pages
+        return new[]
         {
-            if (configuration.Snapshots.TryGetValue(sourceKey, out var snap))
-            {
-                match = snap.Inventory.FirstOrDefault(e =>
-                    e.ItemId == action.ItemId && e.IsHQ == action.IsHQ && e.Quantity >= action.Quantity);
-            }
-        }
-        if (match == null) return false;
-
-        var sellListAddon = AddonHelper.GetVisible("RetainerSellList");
-        var addonId = sellListAddon != null ? sellListAddon->Id : (ushort)0;
-
-        var agent = FFXIVClientStructs.FFXIV.Client.UI.Agent.AgentInventoryContext.Instance();
-        if (agent == null) return false;
-        agent->OpenForItemSlot((InventoryType)match.ContainerId, match.SlotIndex, 0, addonId);
-        log.Debug($"[Restocker] OpenForItemSlot source={sourceKey} type={match.ContainerId} slot={match.SlotIndex}");
-        return true;
+            InventoryType.RetainerPage1, InventoryType.RetainerPage2, InventoryType.RetainerPage3,
+            InventoryType.RetainerPage4, InventoryType.RetainerPage5, InventoryType.RetainerPage6,
+            InventoryType.RetainerPage7,
+        };
     }
 
     private void TickConfirmingSellDialog()

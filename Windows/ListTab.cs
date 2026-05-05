@@ -90,24 +90,30 @@ public sealed class ListTab
                 result.AddRange(Planner.PlanNewListings(new[] { snap }, entry.ItemId, entry.IsHQ, price, entry.MaxStackPerListing));
             }
         }
-        // 2) キャラ所持品 → 選択された target リテイナーで「預け入れなし」直接出品
+        // 2) キャラバッグ・サドル → 選択された target リテイナーで「預け入れなし」直接出品
+        //    InventoryManager.MoveToRetainerMarket を使うのでサドルも同じ経路。
         foreach (var ch in configuration.Characters.Values)
         {
-            var charSrcKey = CharacterSnapshot.MakeKey(ch.CharacterContentId) + ".bag";
-            if (!charTargetRetainer.TryGetValue(charSrcKey, out var targetKey)) continue;
-            if (string.IsNullOrEmpty(targetKey) || !configuration.Snapshots.TryGetValue(targetKey, out var target)) continue;
-
-            foreach (var entry in DistinctItems(ch.Bag))
-            {
-                var pkey = MakePriceKey(charSrcKey, entry.ItemId, entry.IsHQ);
-                if (!editedPrice.TryGetValue(pkey, out var price) || price <= 0) continue;
-                result.AddRange(Planner.PlanCharacterListings(ch, target, entry.ItemId, entry.IsHQ, price, entry.MaxStackPerListing));
-            }
+            var charKey = CharacterSnapshot.MakeKey(ch.CharacterContentId);
+            // bag
+            AddCharSourceActions(result, ch.Bag, charKey + ".bag");
+            // saddle (free + premium 両方を 1 セットで扱う)
+            AddCharSourceActions(result, ch.Saddlebag.Concat(ch.PremiumSaddlebag).ToList(), charKey + ".saddle");
         }
-        // サドルバッグ系は AgentInventoryContext.OpenForItemSlot が SaddleBag* に対しては
-        // 「マーケットに出品」コンテキストを出さないため、この経路では未対応。
-        // 必要ならユーザーがバッグに移してから出品すればよい（明示的に UI で案内）。
         return result;
+    }
+
+    private void AddCharSourceActions(List<PlannedAction> result, List<Restocker.Data.InventoryEntry> inventory, string sourceKey)
+    {
+        if (!charTargetRetainer.TryGetValue(sourceKey, out var targetKey)) return;
+        if (string.IsNullOrEmpty(targetKey) || !configuration.Snapshots.TryGetValue(targetKey, out var target)) return;
+
+        foreach (var entry in DistinctItems(inventory))
+        {
+            var pkey = MakePriceKey(sourceKey, entry.ItemId, entry.IsHQ);
+            if (!editedPrice.TryGetValue(pkey, out var price) || price <= 0) continue;
+            result.AddRange(Planner.PlanFromInventoryList(inventory, sourceKey, target, entry.ItemId, entry.IsHQ, price, entry.MaxStackPerListing));
+        }
     }
 
     private static IEnumerable<InventoryEntry> DistinctItems(IEnumerable<InventoryEntry> entries)
@@ -201,15 +207,15 @@ public sealed class ListTab
             }
         }
 
-        // サドル系は AgentInventoryContext で出品コンテキストが出ないため非対応扱い
+        // サドル系も MoveToRetainerMarket 経由で直接出品可能
         var saddleRows = AggregatePerSource(ch.Saddlebag.Concat(ch.PremiumSaddlebag).ToList(), listingSource: null);
         var saddleFiltered = ApplyFilter(saddleRows);
-        if (saddleFiltered.Count > 0)
+        if (saddleFiltered.Count > 0 || filter.Length == 0)
         {
             var header = string.Format(Strings.RetainerHeaderInventory, $"{Strings.SaddlebagHeader} ({ch.CharacterName})", saddleFiltered.Count, FreshnessSuffix(ch.LastRefreshedUtc));
             if (DrawCollapsingHeader("saddle-" + sourceKey, header))
             {
-                ImGui.TextDisabled(Strings.SaddleNotListable);
+                DrawCharBagTargetCombo(sourceKey + ".saddle");
                 DrawRowsTable(sourceKey + ".saddle", saddleFiltered, Strings.SaddlebagHeader, isRetainerSource: false);
             }
         }

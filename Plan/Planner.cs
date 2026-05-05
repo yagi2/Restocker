@@ -91,12 +91,12 @@ public static class Planner
     public const int MaxListingSlots = 20;
 
     /// <summary>
-    /// キャラ所持品から target リテイナーへ「預け入れなし」で新規出品する計画。
-    /// 在庫ソースは <paramref name="character"/>.Bag、出品先のスロット制約は
-    /// <paramref name="targetRetainer"/>.Listings の空き数のみで決まる。
+    /// 任意のインベントリリスト（キャラバッグ／サドル等）を在庫源として、
+    /// target リテイナーへ「預け入れなし」直接出品する計画を作る。
     /// </summary>
-    public static List<PlannedAction> PlanCharacterListings(
-        Restocker.Data.CharacterSnapshot character,
+    public static List<PlannedAction> PlanFromInventoryList(
+        IEnumerable<Restocker.Data.InventoryEntry> inventory,
+        string sourceKey,
         RetainerSnapshot targetRetainer,
         uint itemId,
         bool isHQ,
@@ -106,15 +106,12 @@ public static class Planner
         var result = new List<PlannedAction>();
         if (maxStackPerListing <= 0) return result;
 
-        var owned = character.Bag
-            .Where(e => e.ItemId == itemId && e.IsHQ == isHQ)
-            .Sum(e => e.Quantity);
+        var owned = inventory.Where(e => e.ItemId == itemId && e.IsHQ == isHQ).Sum(e => e.Quantity);
         if (owned <= 0) return result;
 
         var freeSlots = MaxListingSlots - targetRetainer.Listings.Count;
         if (freeSlots <= 0) return result;
 
-        var sourceKey = Restocker.Data.CharacterSnapshot.MakeKey(character.CharacterContentId);
         var remaining = owned;
         var slotsLeft = freeSlots;
 
@@ -148,6 +145,15 @@ public static class Planner
         }
         return result;
     }
+
+    /// <summary>後方互換: <see cref="PlanFromInventoryList"/> のキャラバッグ版エイリアス。</summary>
+    public static List<PlannedAction> PlanCharacterListings(
+        Restocker.Data.CharacterSnapshot character,
+        RetainerSnapshot targetRetainer,
+        uint itemId, bool isHQ, long unitPrice, int maxStackPerListing)
+        => PlanFromInventoryList(character.Bag,
+            Restocker.Data.CharacterSnapshot.MakeKey(character.CharacterContentId),
+            targetRetainer, itemId, isHQ, unitPrice, maxStackPerListing);
 
     /// <summary>
     /// 計画と実際の保有量の差分から「あふれて出品できなかった個数」を計算する。
