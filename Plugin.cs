@@ -6,6 +6,7 @@ using Dalamud.Plugin.Services;
 using Dalamud.Interface.Windowing;
 using Restocker.Windows;
 using Restocker.Localization;
+using Restocker.Execution;
 
 namespace Restocker;
 
@@ -35,6 +36,7 @@ public sealed class Plugin : IDalamudPlugin
     private RetainerWatcher RetainerWatcher { get; }
     private BellWatcher BellWatcher { get; }
     private AutoRetainerDetector ArDetector { get; }
+    private Executor Executor { get; }
 
     public Plugin()
     {
@@ -63,6 +65,8 @@ public sealed class Plugin : IDalamudPlugin
         ArDetector = new AutoRetainerDetector(PluginInterface, NotificationManager, Log);
         ArDetector.WarnIfPresent();
 
+        Executor = new Executor(Framework, GameGui, Log, Configuration);
+
         CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
             HelpMessage = "Open the Restocker window."
@@ -78,6 +82,7 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.OpenMainUi -= ToggleMainUi;
 
         WindowSystem.RemoveAllWindows();
+        Executor.Dispose();
         BellWatcher.Dispose();
         RetainerWatcher.Dispose();
         MainWindow.Dispose();
