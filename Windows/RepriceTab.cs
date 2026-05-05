@@ -24,6 +24,8 @@ public sealed class RepriceTab
     /// <summary>編集中の新価格。キーは "{retainerKey}#{listingIndex}"。</summary>
     private readonly Dictionary<string, long> editedPrice = new();
     private string? lastMatchSummary;
+    /// <summary>明示的に折りたたんだリテイナーセクションの key。</summary>
+    private readonly HashSet<string> collapsedSections = new();
 
     public RepriceTab(Configuration configuration, Executor executor, ConfirmDialog confirmDialog, MarketCache marketCache)
     {
@@ -177,8 +179,7 @@ public sealed class RepriceTab
             if (filteredListings.Count == 0 && filter.Length > 0) continue;
 
             var header = string.Format(Strings.RetainerHeader, snap.RetainerName, filteredListings.Count, FreshnessSuffix(snap));
-            if (!ImGui.CollapsingHeader(header + "##reprice-" + snap.Key, ImGuiTreeNodeFlags.DefaultOpen))
-                continue;
+            if (!DrawCollapsingHeader("reprice-" + snap.Key, header)) continue;
 
             DrawRetainerListings(snap, filteredListings);
         }
@@ -207,6 +208,23 @@ public sealed class RepriceTab
         if (age.TotalHours < 1) return $"{(int)age.TotalMinutes}m";
         if (age.TotalDays < 1) return $"{(int)age.TotalHours}h";
         return $"{(int)age.TotalDays}d";
+    }
+
+    /// <summary>
+    /// 折りたたみ状態を <see cref="collapsedSections"/> で明示管理する CollapsingHeader。
+    /// ImGui の DefaultOpen が再評価されて勝手に開く事故を回避。
+    /// </summary>
+    private bool DrawCollapsingHeader(string id, string label)
+    {
+        var open = !collapsedSections.Contains(id);
+        ImGui.SetNextItemOpen(open, ImGuiCond.Always);
+        var nowOpen = ImGui.CollapsingHeader(label + "##" + id);
+        if (nowOpen != open)
+        {
+            if (nowOpen) collapsedSections.Remove(id);
+            else collapsedSections.Add(id);
+        }
+        return nowOpen;
     }
 
     private void DrawRetainerListings(RetainerSnapshot snap, List<(ListingEntry Entry, string ItemName)> rows)

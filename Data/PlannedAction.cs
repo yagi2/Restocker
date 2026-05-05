@@ -24,6 +24,14 @@ public sealed class PlannedAction
     /// リプライス時の対象出品スロット（0..19）。新規出品では未使用。
     /// </summary>
     public int ListingIndex { get; set; }
+
+    /// <summary>
+    /// 新規出品の供給元。
+    /// 通常はリテイナー自身のインベントリ（=<see cref="RetainerKey"/>と同じ）だが、
+    /// キャラ所持品から target リテイナーで出品するパターンでは
+    /// <see cref="CharacterSnapshot.MakeKey"/> 形式の文字列が入る。
+    /// </summary>
+    public string SourceKey { get; set; } = string.Empty;
 }
 
 public enum PlannedActionKind

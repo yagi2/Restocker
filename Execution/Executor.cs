@@ -281,9 +281,26 @@ public sealed unsafe class Executor : IDisposable
 
     private bool OpenContextForNewListing(PlannedAction action)
     {
-        if (!configuration.Snapshots.TryGetValue(action.RetainerKey, out var snap)) return false;
-        var match = snap.Inventory.FirstOrDefault(e =>
-            e.ItemId == action.ItemId && e.IsHQ == action.IsHQ && e.Quantity >= action.Quantity);
+        // 供給元: SourceKey が空 or RetainerKey と同じ → リテイナーの bag、
+        //          char.* で始まる → 現在ログイン中キャラの bag (Inventory1-4)
+        Data.InventoryEntry? match = null;
+        var sourceKey = string.IsNullOrEmpty(action.SourceKey) ? action.RetainerKey : action.SourceKey;
+        if (sourceKey.StartsWith("char."))
+        {
+            if (configuration.Characters.TryGetValue(sourceKey, out var ch))
+            {
+                match = ch.Bag.FirstOrDefault(e =>
+                    e.ItemId == action.ItemId && e.IsHQ == action.IsHQ && e.Quantity >= action.Quantity);
+            }
+        }
+        else
+        {
+            if (configuration.Snapshots.TryGetValue(sourceKey, out var snap))
+            {
+                match = snap.Inventory.FirstOrDefault(e =>
+                    e.ItemId == action.ItemId && e.IsHQ == action.IsHQ && e.Quantity >= action.Quantity);
+            }
+        }
         if (match == null) return false;
 
         var sellListAddon = AddonHelper.GetVisible("RetainerSellList");
@@ -292,7 +309,7 @@ public sealed unsafe class Executor : IDisposable
         var agent = FFXIVClientStructs.FFXIV.Client.UI.Agent.AgentInventoryContext.Instance();
         if (agent == null) return false;
         agent->OpenForItemSlot((InventoryType)match.ContainerId, match.SlotIndex, 0, addonId);
-        log.Debug($"[Restocker] OpenForItemSlot type={match.ContainerId} slot={match.SlotIndex}");
+        log.Debug($"[Restocker] OpenForItemSlot source={sourceKey} type={match.ContainerId} slot={match.SlotIndex}");
         return true;
     }
 

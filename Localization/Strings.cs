@@ -116,6 +116,23 @@ public static class Strings
     public static string RetainerHeaderInventory => T("{0}  ({1} items, {2})", "{0}  ({1}品 / {2})", "{0}  ({1} Artikel, {2})", "{0}  ({1} articles, {2})", "{0}  ({1} 物品, {2})", "{0}  ({1}품, {2})");
     public static string CharacterInventoryHeader => T("Character bag (entrust required)", "キャラ所持品（要 預け入れ）", "Charakter-Tasche (Übergabe nötig)", "Sac du personnage (transfert requis)", "角色背包（需先寄存）", "캐릭터 가방 (위탁 필요)");
     public static string SaddlebagHeader => T("Saddlebag (entrust required)", "サドルバッグ（要 預け入れ）", "Satteltasche (Übergabe nötig)", "Fonte (transfert requis)", "马鞍袋（需先寄存）", "새들백 (위탁 필요)");
+    public static string CharBagTargetLabel => T("Target retainer", "出品先リテイナー", "Ziel-Gehilfe", "Intendant cible", "上架雇员", "등록 대상 리테이너");
+    public static string CharBagPickTarget => T("(pick a target retainer)", "（出品先を選択）", "(Ziel wählen)", "(choisis un intendant)", "（请选择雇员）", "(대상 선택)");
+    public static string CharBagNeedRetainerSnapshot => T(
+        "No retainer snapshot yet — refresh retainers first to enable target selection.",
+        "リテイナーの snapshot がまだありません。先に「全リテイナー更新」してください。",
+        "Erst Gehilfen aktualisieren, dann Ziel wählen.",
+        "Aucun snapshot — actualise d'abord les intendants.",
+        "尚无雇员快照，请先刷新。",
+        "리테이너 스냅샷이 없습니다. 먼저 새로고침하세요.");
+    public static string FreeSlots => T("free slot(s)", "枠空き", "Slot(s)", "places", "空格", "빈 슬롯");
+    public static string SaddleNotListable => T(
+        "Saddlebag items are not listable directly. Move them to your character bag first.",
+        "サドルバッグからは直接出品できません。先にキャラバッグへ移してください。",
+        "Sattelartikel sind nicht direkt verkäuflich.",
+        "Articles de fonte non vendables directement.",
+        "马鞍袋物品无法直接上架，请先放入角色背包。",
+        "새들백 아이템은 직접 등록할 수 없습니다.");
     public static string ColExpand => T("+/-", "展開", "+/-", "+/-", "展开", "확장");
     public static string ColItem => T("Item", "アイテム", "Artikel", "Article", "物品", "아이템");
     public static string ColTotalQty => T("Qty", "合計数", "Anz.", "Qté", "数量", "수량");

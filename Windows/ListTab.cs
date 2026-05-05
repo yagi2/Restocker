@@ -23,6 +23,10 @@ public sealed class ListTab
     private bool listableOnly = true;
     /// <summary>編集中の価格。キーは "{sourceKey}#{itemId}.{hq}"。</summary>
     private readonly Dictionary<string, long> editedPrice = new();
+    /// <summary>キャラ所持品セクションごとの「出品先リテイナー key」選択。キーは char source key。</summary>
+    private readonly Dictionary<string, string> charTargetRetainer = new();
+    /// <summary>明示的に折りたたんだセクションの id。CollapsingHeader のフレーム間状態保持を奪われる事故を回避。</summary>
+    private readonly HashSet<string> collapsedSections = new();
 
     public ListTab(Configuration configuration, Executor executor, ConfirmDialog confirmDialog)
     {
@@ -76,7 +80,7 @@ public sealed class ListTab
     private List<PlannedAction> BuildPlannedActions()
     {
         var result = new List<PlannedAction>();
-        // リテイナーソースに対しては該当リテイナーのみ Planner にかける
+        // 1) リテイナー所持品 → そのリテイナーで出品（既存）
         foreach (var snap in configuration.Snapshots.Values)
         {
             foreach (var entry in DistinctItems(snap.Inventory))
@@ -86,8 +90,23 @@ public sealed class ListTab
                 result.AddRange(Planner.PlanNewListings(new[] { snap }, entry.ItemId, entry.IsHQ, price, entry.MaxStackPerListing));
             }
         }
-        // キャラ所持品/サドルは Entrust ステップが要るので 0.1.x ではプランに含めない
-        // (Executor 側でも NewListing は skip。char inventory 経由の出品は次フェーズ)
+        // 2) キャラ所持品 → 選択された target リテイナーで「預け入れなし」直接出品
+        foreach (var ch in configuration.Characters.Values)
+        {
+            var charSrcKey = CharacterSnapshot.MakeKey(ch.CharacterContentId) + ".bag";
+            if (!charTargetRetainer.TryGetValue(charSrcKey, out var targetKey)) continue;
+            if (string.IsNullOrEmpty(targetKey) || !configuration.Snapshots.TryGetValue(targetKey, out var target)) continue;
+
+            foreach (var entry in DistinctItems(ch.Bag))
+            {
+                var pkey = MakePriceKey(charSrcKey, entry.ItemId, entry.IsHQ);
+                if (!editedPrice.TryGetValue(pkey, out var price) || price <= 0) continue;
+                result.AddRange(Planner.PlanCharacterListings(ch, target, entry.ItemId, entry.IsHQ, price, entry.MaxStackPerListing));
+            }
+        }
+        // サドルバッグ系は AgentInventoryContext.OpenForItemSlot が SaddleBag* に対しては
+        // 「マーケットに出品」コンテキストを出さないため、この経路では未対応。
+        // 必要ならユーザーがバッグに移してから出品すればよい（明示的に UI で案内）。
         return result;
     }
 
@@ -135,6 +154,24 @@ public sealed class ListTab
         ImGui.EndChild();
     }
 
+    /// <summary>
+    /// 折りたたみ状態を <see cref="collapsedSections"/> で明示管理する CollapsingHeader。
+    /// ImGui のフレーム内ステート（DefaultOpen）に依存しないので、
+    /// 「閉じたのに勝手に展開される」事故が起きない。
+    /// </summary>
+    private bool DrawCollapsingHeader(string id, string label)
+    {
+        var open = !collapsedSections.Contains(id);
+        ImGui.SetNextItemOpen(open, ImGuiCond.Always);
+        var nowOpen = ImGui.CollapsingHeader(label + "##" + id);
+        if (nowOpen != open)
+        {
+            if (nowOpen) collapsedSections.Remove(id);
+            else collapsedSections.Add(id);
+        }
+        return nowOpen;
+    }
+
     private void DrawRetainerSection(RetainerSnapshot snap)
     {
         var rows = AggregatePerSource(snap.Inventory, snap.Listings);
@@ -142,7 +179,7 @@ public sealed class ListTab
         if (filtered.Count == 0 && filter.Length > 0) return;
 
         var header = string.Format(Strings.RetainerHeaderInventory, snap.RetainerName, filtered.Count, FreshnessSuffix(snap.LastRefreshedUtc));
-        if (!ImGui.CollapsingHeader(header + "##list-" + snap.Key, ImGuiTreeNodeFlags.DefaultOpen)) return;
+        if (!DrawCollapsingHeader("list-" + snap.Key, header)) return;
 
         DrawRowsTable(snap.Key, filtered, sourceLabel: null, isRetainerSource: true);
     }
@@ -151,28 +188,59 @@ public sealed class ListTab
     {
         var sourceKey = CharacterSnapshot.MakeKey(ch.CharacterContentId);
 
-        // bag
+        // バッグ — target リテイナーを指定して「預け入れなし」で直接出品可
         var bagRows = AggregatePerSource(ch.Bag, listingSource: null);
         var bagFiltered = ApplyFilter(bagRows);
         if (bagFiltered.Count > 0 || filter.Length == 0)
         {
             var header = string.Format(Strings.RetainerHeaderInventory, $"{Strings.CharacterInventoryHeader} ({ch.CharacterName})", bagFiltered.Count, FreshnessSuffix(ch.LastRefreshedUtc));
-            if (ImGui.CollapsingHeader(header + "##char-" + sourceKey))
+            if (DrawCollapsingHeader("char-" + sourceKey, header))
             {
+                DrawCharBagTargetCombo(sourceKey + ".bag");
                 DrawRowsTable(sourceKey + ".bag", bagFiltered, Strings.CharacterInventoryHeader, isRetainerSource: false);
             }
         }
 
-        // saddlebag
+        // サドル系は AgentInventoryContext で出品コンテキストが出ないため非対応扱い
         var saddleRows = AggregatePerSource(ch.Saddlebag.Concat(ch.PremiumSaddlebag).ToList(), listingSource: null);
         var saddleFiltered = ApplyFilter(saddleRows);
         if (saddleFiltered.Count > 0)
         {
             var header = string.Format(Strings.RetainerHeaderInventory, $"{Strings.SaddlebagHeader} ({ch.CharacterName})", saddleFiltered.Count, FreshnessSuffix(ch.LastRefreshedUtc));
-            if (ImGui.CollapsingHeader(header + "##saddle-" + sourceKey))
+            if (DrawCollapsingHeader("saddle-" + sourceKey, header))
             {
+                ImGui.TextDisabled(Strings.SaddleNotListable);
                 DrawRowsTable(sourceKey + ".saddle", saddleFiltered, Strings.SaddlebagHeader, isRetainerSource: false);
             }
+        }
+    }
+
+    private void DrawCharBagTargetCombo(string sourceKey)
+    {
+        var retainers = configuration.Snapshots.Values
+            .OrderBy(s => s.RetainerName).ToList();
+        if (retainers.Count == 0)
+        {
+            ImGui.TextDisabled(Strings.CharBagNeedRetainerSnapshot);
+            return;
+        }
+
+        var current = charTargetRetainer.GetValueOrDefault(sourceKey, string.Empty);
+        var labels = new List<string> { Strings.CharBagPickTarget };
+        var keys = new List<string> { string.Empty };
+        foreach (var r in retainers)
+        {
+            var freeSlots = Plan.Planner.MaxListingSlots - r.Listings.Count;
+            labels.Add($"{r.RetainerName}  ({freeSlots} {Strings.FreeSlots})");
+            keys.Add(r.Key);
+        }
+        var idx = keys.IndexOf(current);
+        if (idx < 0) idx = 0;
+
+        ImGui.SetNextItemWidth(280);
+        if (ImGui.Combo($"{Strings.CharBagTargetLabel}##target-{sourceKey}", ref idx, labels.ToArray(), labels.Count))
+        {
+            charTargetRetainer[sourceKey] = keys[idx];
         }
     }
 
