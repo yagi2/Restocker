@@ -3,6 +3,7 @@ using System.Linq;
 using Dalamud.Bindings.ImGui;
 using Lumina.Excel.Sheets;
 using Restocker.Data;
+using Restocker.Localization;
 
 namespace Restocker.Windows;
 
@@ -35,13 +36,13 @@ public sealed class RepriceTab
     private void DrawToolbar()
     {
         ImGui.SetNextItemWidth(240);
-        ImGui.InputTextWithHint("##reprice-filter", "アイテム名で絞り込み", ref filter, 64);
+        ImGui.InputTextWithHint("##reprice-filter", Strings.Filter, ref filter, 64);
         ImGui.SameLine();
         ImGui.BeginDisabled();
-        ImGui.Button("全行に最安値-1を適用（未実装）");
+        ImGui.Button(Strings.RepriceMatchLowest);
         ImGui.EndDisabled();
         ImGui.SameLine();
-        ImGui.TextDisabled("HQ/NQ は別行扱い");
+        ImGui.TextDisabled(Strings.HQNQNote);
     }
 
     private record AggregateKey(uint ItemId, bool IsHQ);
@@ -75,7 +76,7 @@ public sealed class RepriceTab
     {
         if (configuration.Snapshots.Count == 0)
         {
-            ImGui.TextDisabled("リテイナー召喚→マーケット出品リストを開けば、ここに集約表示されます。");
+            ImGui.TextDisabled(Strings.EmptyHint);
             return;
         }
 
@@ -87,12 +88,12 @@ public sealed class RepriceTab
             return;
 
         ImGui.TableSetupScrollFreeze(0, 1);
-        ImGui.TableSetupColumn("展開", ImGuiTableColumnFlags.WidthFixed, 28);
-        ImGui.TableSetupColumn("アイテム", ImGuiTableColumnFlags.WidthStretch, 0.4f);
-        ImGui.TableSetupColumn("合計数", ImGuiTableColumnFlags.WidthFixed, 70);
-        ImGui.TableSetupColumn("出品本数", ImGuiTableColumnFlags.WidthFixed, 80);
-        ImGui.TableSetupColumn("現在価格", ImGuiTableColumnFlags.WidthStretch, 0.25f);
-        ImGui.TableSetupColumn("新価格", ImGuiTableColumnFlags.WidthStretch, 0.2f);
+        ImGui.TableSetupColumn(Strings.ColExpand, ImGuiTableColumnFlags.WidthFixed, 28);
+        ImGui.TableSetupColumn(Strings.ColItem, ImGuiTableColumnFlags.WidthStretch, 0.4f);
+        ImGui.TableSetupColumn(Strings.ColTotalQty, ImGuiTableColumnFlags.WidthFixed, 70);
+        ImGui.TableSetupColumn(Strings.ColListings, ImGuiTableColumnFlags.WidthFixed, 80);
+        ImGui.TableSetupColumn(Strings.ColCurrentPrice, ImGuiTableColumnFlags.WidthStretch, 0.25f);
+        ImGui.TableSetupColumn(Strings.ColNewPrice, ImGuiTableColumnFlags.WidthStretch, 0.2f);
         ImGui.TableHeadersRow();
 
         var rows = BuildAggregateRows();
@@ -103,7 +104,7 @@ public sealed class RepriceTab
 
             ImGui.TableNextColumn();
             var isExpanded = expanded.Contains(aggKey);
-            if (ImGui.SmallButton((isExpanded ? "▼" : "▶") + "##" + aggKey))
+            if (ImGui.SmallButton((isExpanded ? "-" : "+") + "##" + aggKey))
             {
                 if (isExpanded) expanded.Remove(aggKey);
                 else expanded.Add(aggKey);
@@ -137,7 +138,7 @@ public sealed class RepriceTab
                     ImGui.TableNextColumn();
                     ImGui.TextDisabled("—");
                     ImGui.TableNextColumn();
-                    ImGui.TextUnformatted(listing.UnitPrice == 0 ? "未取得" : listing.UnitPrice.ToString("N0"));
+                    ImGui.TextUnformatted(listing.UnitPrice == 0 ? Strings.PriceUnknown : listing.UnitPrice.ToString("N0"));
                     ImGui.TableNextColumn();
                     DrawListingPriceInput(snap.Key, listing.ListingIndex);
                 }
@@ -150,7 +151,7 @@ public sealed class RepriceTab
     private static void DrawCurrentPriceCell(List<(RetainerSnapshot Snap, ListingEntry Listing)> children)
     {
         var prices = children.Select(c => c.Listing.UnitPrice).Where(p => p > 0).Distinct().OrderBy(p => p).ToList();
-        if (prices.Count == 0) ImGui.TextDisabled("未取得");
+        if (prices.Count == 0) ImGui.TextDisabled(Strings.PriceUnknown);
         else if (prices.Count == 1) ImGui.TextUnformatted(prices[0].ToString("N0"));
         else ImGui.TextUnformatted($"{prices[0]:N0} - {prices[^1]:N0}");
     }
@@ -184,10 +185,10 @@ public sealed class RepriceTab
         var listCount = editedListingPrice.Count(kv => kv.Value > 0);
         var total = aggCount + listCount;
 
-        ImGui.TextUnformatted($"編集中: アイテム単位 {aggCount} / 個別 {listCount}");
+        ImGui.TextUnformatted(string.Format(Strings.EditedSummary, aggCount, listCount));
         ImGui.SameLine();
         ImGui.BeginDisabled();
-        ImGui.Button($"適用（未実装、対象 {total} 種）");
+        ImGui.Button($"{Strings.Apply} {Strings.NotImplemented} ({total})");
         ImGui.EndDisabled();
     }
 }

@@ -5,6 +5,7 @@ using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using Dalamud.Interface.Windowing;
 using Restocker.Windows;
+using Restocker.Localization;
 
 namespace Restocker;
 
@@ -37,6 +38,7 @@ public sealed class Plugin : IDalamudPlugin
     public Plugin()
     {
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
+        Strings.SetLanguage(Configuration.ResolveLanguage(ClientState.ClientLanguage));
 
         MainWindow = new MainWindow(Configuration);
         WindowSystem.AddWindow(MainWindow);

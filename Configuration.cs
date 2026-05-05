@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Dalamud.Configuration;
 using Restocker.Data;
+using Restocker.Localization;
 
 namespace Restocker;
 
@@ -20,6 +21,27 @@ public sealed class Configuration : IPluginConfiguration
     /// キーは <see cref="RetainerSnapshot.Key"/>（CharacterContentId + RetainerId の文字列）。
     /// </summary>
     public Dictionary<string, RetainerSnapshot> Snapshots { get; set; } = new();
+
+    /// <summary>
+    /// UI 言語。
+    /// -1 = FFXIV クライアント言語に従う（ZH/KO はグローバルクライアントから返らないため EN/JA/DE/FR にフォールバック）。
+    /// 0..5 = <see cref="Language"/> 列挙の値で明示指定。
+    /// </summary>
+    public int Language { get; set; } = -1;
+
+    public Language ResolveLanguage(Dalamud.Game.ClientLanguage clientLanguage)
+    {
+        if (Language >= 0 && Language <= 5)
+            return (Language)Language;
+
+        return clientLanguage switch
+        {
+            Dalamud.Game.ClientLanguage.Japanese => Localization.Language.Japanese,
+            Dalamud.Game.ClientLanguage.German => Localization.Language.German,
+            Dalamud.Game.ClientLanguage.French => Localization.Language.French,
+            _ => Localization.Language.English,
+        };
+    }
 
     public void Save()
     {

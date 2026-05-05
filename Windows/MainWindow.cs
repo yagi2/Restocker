@@ -3,6 +3,7 @@ using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
+using Restocker.Localization;
 
 namespace Restocker.Windows;
 
@@ -10,13 +11,15 @@ public sealed class MainWindow : Window, IDisposable
 {
     private readonly Configuration configuration;
     private readonly RepriceTab repriceTab;
+    private readonly ListTab listTab;
 
     public MainWindow(Configuration configuration)
-        : base("Restocker##MainWindow",
+        : base($"{Strings.WindowTitle}##MainWindow",
             ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
     {
         this.configuration = configuration;
         this.repriceTab = new RepriceTab(configuration);
+        this.listTab = new ListTab(configuration);
         SizeConstraints = new WindowSizeConstraints
         {
             MinimumSize = new Vector2(720, 420),
@@ -33,17 +36,17 @@ public sealed class MainWindow : Window, IDisposable
 
         if (ImGui.BeginTabBar("##restocker-tabs"))
         {
-            if (ImGui.BeginTabItem("リプライス"))
+            if (ImGui.BeginTabItem(Strings.TabReprice))
             {
                 repriceTab.Draw();
                 ImGui.EndTabItem();
             }
-            if (ImGui.BeginTabItem("新規出品"))
+            if (ImGui.BeginTabItem(Strings.TabList))
             {
-                DrawListTabPlaceholder();
+                listTab.Draw();
                 ImGui.EndTabItem();
             }
-            if (ImGui.BeginTabItem("設定"))
+            if (ImGui.BeginTabItem(Strings.TabSettings))
             {
                 DrawSettingsTab();
                 ImGui.EndTabItem();
@@ -56,30 +59,46 @@ public sealed class MainWindow : Window, IDisposable
     {
         var snapshots = configuration.Snapshots.Values.ToList();
         var freshest = snapshots.Count == 0
-            ? "未取得"
+            ? Strings.HeaderUnknown
             : snapshots.Max(s => s.LastRefreshedUtc).ToLocalTime().ToString("yyyy-MM-dd HH:mm");
 
-        ImGui.TextUnformatted($"キャッシュ: {snapshots.Count} リテイナー / 最終更新 {freshest}");
+        ImGui.TextUnformatted($"{Strings.HeaderCachedRetainers} {snapshots.Count} {Strings.HeaderRetainers} / {Strings.HeaderLastUpdated} {freshest}");
         ImGui.SameLine();
         ImGui.BeginDisabled();
-        ImGui.SmallButton("全リテイナー更新（未実装）");
+        ImGui.SmallButton(Strings.HeaderRefreshAll);
         ImGui.EndDisabled();
-    }
-
-    private void DrawListTabPlaceholder()
-    {
-        ImGui.TextDisabled("新規分割出品画面は次コミット以降で実装。");
-        var totalInv = configuration.Snapshots.Values.Sum(s => s.Inventory.Count);
-        ImGui.TextUnformatted($"集計（参考）: インベントリ品 {totalInv} 件");
     }
 
     private void DrawSettingsTab()
     {
         var autoOpen = configuration.AutoOpenOnBell;
-        if (ImGui.Checkbox("リテイナーベル展開時にウィンドウを自動表示", ref autoOpen))
+        if (ImGui.Checkbox(Strings.SettingsAutoOpenOnBell, ref autoOpen))
         {
             configuration.AutoOpenOnBell = autoOpen;
             configuration.Save();
+        }
+
+        ImGui.Spacing();
+
+        var langIdx = configuration.Language;
+        var labels = new[]
+        {
+            Strings.SettingsLanguageAuto,
+            Strings.LanguageNameEnglish,
+            Strings.LanguageNameJapanese,
+            Strings.LanguageNameGerman,
+            Strings.LanguageNameFrench,
+            Strings.LanguageNameChinese,
+            Strings.LanguageNameKorean,
+        };
+        // langIdx: -1 = auto / 0..5 = explicit。コンボの 0 番目を auto にマップする。
+        var combo = langIdx + 1;
+        ImGui.SetNextItemWidth(220);
+        if (ImGui.Combo(Strings.SettingsLanguage, ref combo, labels, labels.Length))
+        {
+            configuration.Language = combo - 1;
+            configuration.Save();
+            Strings.SetLanguage(configuration.ResolveLanguage(Plugin.ClientState.ClientLanguage));
         }
     }
 }
