@@ -81,7 +81,10 @@ public sealed class ListTab
         if (disabled) ImGui.BeginDisabled();
         if (ImGui.Button(string.Format(Strings.ApplyWithCount, Strings.Apply, actions.Count)))
         {
-            confirmDialog.Request(actions, executor.StartApplyActions);
+            // Apply 直前にキャラ snapshot を取り直して plan の食い違いを防ぐ
+            Plugin.Instance?.RetainerWatcher.CaptureCharacterSnapshot();
+            var freshActions = BuildPlannedActions();
+            confirmDialog.Request(freshActions, executor.StartApplyActions);
         }
         if (disabled) ImGui.EndDisabled();
 

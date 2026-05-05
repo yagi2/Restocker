@@ -31,10 +31,11 @@ public sealed class Plugin : IDalamudPlugin
     private const string CommandName = "/restocker";
 
     public static Configuration Configuration { get; private set; } = null!;
+    public static Plugin Instance { get; private set; } = null!;
+    public RetainerWatcher RetainerWatcher { get; private set; } = null!;
     public readonly WindowSystem WindowSystem = new("Restocker");
 
     private MainWindow MainWindow { get; }
-    private RetainerWatcher RetainerWatcher { get; }
     private BellWatcher BellWatcher { get; }
     private AutoRetainerDetector ArDetector { get; }
     private Executor Executor { get; }
@@ -42,11 +43,12 @@ public sealed class Plugin : IDalamudPlugin
 
     public Plugin()
     {
+        Instance = this;
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         Strings.SetLanguage(Configuration.ResolveLanguage(ClientState.ClientLanguage));
 
         Executor = new Executor(Framework, Log, Configuration);
-        MarketWatcher = new MarketWatcher(AddonLifecycle, Log);
+        MarketWatcher = new MarketWatcher(AddonLifecycle, Framework, Log);
 
         MainWindow = new MainWindow(Configuration, Executor, MarketWatcher);
         WindowSystem.AddWindow(MainWindow);

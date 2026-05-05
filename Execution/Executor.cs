@@ -408,9 +408,10 @@ public sealed unsafe class Executor : IDisposable
     }
 
     /// <summary>
-    /// SourceKey に応じて適切な container を実機の InventoryManager から直接走査し
-    /// （snapshot は古い可能性があるため）、十分な qty のスロットを 1 つ見つけ、
-    /// MoveToRetainerMarket(src→RetainerMarketの空きスロット, qty, price) を呼ぶ。
+    /// MoveToRetainerMarket で 1 件出品する。
+    /// SourceKey は「ヒント」として候補 container 順序に使うだけで、
+    /// 結局は実機の InventoryManager 全体から item を見つけたら即発火する。
+    /// (UI のセクション操作ミスや snapshot stale を吸収するため。)
     /// </summary>
     private bool ExecuteDirectListing(PlannedAction action)
     {
@@ -429,9 +430,8 @@ public sealed unsafe class Executor : IDisposable
         }
         if (dstSlot < 0) { log.Warning("[Restocker] no free RetainerMarket slot"); return false; }
 
-        // ソースの候補 container 順序: SourceKey によって決定
         var sourceKey = string.IsNullOrEmpty(action.SourceKey) ? action.RetainerKey : action.SourceKey;
-        var candidates = SourceContainersFor(sourceKey);
+        var candidates = ResolveSearchOrder(sourceKey);
 
         foreach (var t in candidates)
         {
@@ -450,14 +450,66 @@ public sealed unsafe class Executor : IDisposable
                     InventoryType.RetainerMarket, (ushort)dstSlot,
                     (uint)action.Quantity,
                     (uint)Math.Min(action.UnitPrice, uint.MaxValue));
-                log.Debug($"[Restocker] MoveToRetainerMarket src={t}#{i} -> market#{dstSlot} qty={action.Quantity} price={action.UnitPrice}");
+                log.Debug($"[Restocker] MoveToRetainerMarket src={t}#{i}({item->Quantity}) -> market#{dstSlot} qty={action.Quantity} price={action.UnitPrice}");
                 return true;
             }
         }
 
-        log.Warning($"[Restocker] no source slot with itemId={action.ItemId} hq={action.IsHQ} qty>={action.Quantity} in any of: {string.Join(",", candidates)}");
+        // 失敗時は、各 container に該当 item があれば（qty 不足でも）情報を残す
+        log.Warning($"[Restocker] no source slot with itemId={action.ItemId} hq={action.IsHQ} qty>={action.Quantity} (src hint={sourceKey}, searched={string.Join(",", candidates)})");
+        foreach (var t in candidates)
+        {
+            var c = im->GetInventoryContainer(t);
+            if (c == null || !c->IsLoaded) continue;
+            for (var i = 0; i < c->Size; i++)
+            {
+                var it = c->GetInventorySlot(i);
+                if (it == null || it->ItemId == 0) continue;
+                if (it->ItemId == action.ItemId)
+                {
+                    var hq = (it->Flags & FFXIVClientStructs.FFXIV.Client.Game.InventoryItem.ItemFlags.HighQuality) != 0;
+                    log.Information($"  found {t}#{i} item={it->ItemId} hq={hq} qty={it->Quantity} (need hq={action.IsHQ} qty>={action.Quantity})");
+                }
+            }
+        }
         return false;
     }
+
+    /// <summary>
+    /// 検索順序: source ヒントに沿って優先するが、見つからなければ反対側も walk する。
+    /// .saddle の場合は char bag (staging 後) のみ。
+    /// </summary>
+    private static InventoryType[] ResolveSearchOrder(string sourceKey)
+    {
+        if (sourceKey.EndsWith(".saddle"))
+        {
+            // 直接サドルから動かないので staging 後の char bag のみ見る
+            return CharBagContainers;
+        }
+        if (sourceKey.StartsWith("char."))
+        {
+            // ヒントは char bag、ただし retainer bag にあれば fallback で使う
+            return CombineUnique(CharBagContainers, RetainerInventoryContainersStatic);
+        }
+        // retainer 由来 → retainer bag を優先、見つからなければ char bag も
+        return CombineUnique(RetainerInventoryContainersStatic, CharBagContainers);
+    }
+
+    private static InventoryType[] CombineUnique(InventoryType[] a, InventoryType[] b)
+    {
+        var seen = new HashSet<InventoryType>();
+        var list = new List<InventoryType>(a.Length + b.Length);
+        foreach (var x in a) if (seen.Add(x)) list.Add(x);
+        foreach (var x in b) if (seen.Add(x)) list.Add(x);
+        return list.ToArray();
+    }
+
+    private static readonly InventoryType[] RetainerInventoryContainersStatic =
+    {
+        InventoryType.RetainerPage1, InventoryType.RetainerPage2, InventoryType.RetainerPage3,
+        InventoryType.RetainerPage4, InventoryType.RetainerPage5, InventoryType.RetainerPage6,
+        InventoryType.RetainerPage7,
+    };
 
     private static InventoryType[] SourceContainersFor(string sourceKey)
     {
