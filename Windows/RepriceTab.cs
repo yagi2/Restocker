@@ -181,6 +181,14 @@ public sealed class RepriceTab
             var header = string.Format(Strings.RetainerHeader, snap.RetainerName, filteredListings.Count, FreshnessSuffix(snap));
             if (!DrawCollapsingHeader("reprice-" + snap.Key, header)) continue;
 
+            // このリテイナー専用の -1 ギル ボタン
+            if (ImGui.SmallButton(Strings.RepriceMatchLowestThisRetainer + "##matchlowest-" + snap.Key))
+            {
+                ApplyMatchLowestForRetainer(snap);
+            }
+            ImGui.SameLine();
+            ImGui.TextDisabled(Strings.HQNQNote);
+
             DrawRetainerListings(snap, filteredListings);
         }
 
@@ -225,6 +233,41 @@ public sealed class RepriceTab
             else collapsedSections.Add(id);
         }
         return nowOpen;
+    }
+
+    /// <summary>
+    /// このリテイナーの listing にだけ MarketCache の最安値 -1ギルを適用。
+    /// </summary>
+    private void ApplyMatchLowestForRetainer(RetainerSnapshot snap)
+    {
+        var seen = new HashSet<(uint, bool)>();
+        var missing = new HashSet<(uint, bool, string)>();
+        var applied = 0;
+        var sheet = Plugin.DataManager.GetExcelSheet<Item>();
+
+        foreach (var listing in snap.Listings)
+        {
+            var name = sheet.TryGetRow(listing.ItemId, out var row) ? row.Name.ExtractText() : $"#{listing.ItemId}";
+            if (listing.IsHQ) name += " (HQ)";
+            if (filter.Length > 0 && !name.Contains(filter, System.StringComparison.OrdinalIgnoreCase)) continue;
+
+            seen.Add((listing.ItemId, listing.IsHQ));
+            if (!marketCache.HasData(listing.ItemId, listing.IsHQ))
+            {
+                missing.Add((listing.ItemId, listing.IsHQ, name));
+                continue;
+            }
+            var lowest = marketCache.GetLowest(listing.ItemId, listing.IsHQ);
+            if (lowest <= 1) continue;
+            editedPrice[$"{snap.Key}#{listing.ListingIndex}"] = lowest - 1;
+            applied++;
+        }
+
+        if (missing.Count == 0)
+            lastMatchSummary = $"{snap.RetainerName}: " + string.Format(Strings.MatchAppliedSummary, applied, seen.Count);
+        else
+            lastMatchSummary = $"{snap.RetainerName}: " + string.Format(Strings.MatchAppliedSummaryWithMissing, applied, seen.Count, missing.Count,
+                string.Join(", ", missing.Take(5).Select(m => m.Item3)) + (missing.Count > 5 ? "…" : ""));
     }
 
     private void DrawRetainerListings(RetainerSnapshot snap, List<(ListingEntry Entry, string ItemName)> rows)

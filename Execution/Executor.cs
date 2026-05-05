@@ -35,6 +35,7 @@ public sealed unsafe class Executor : IDisposable
     public int CompletedActions { get; private set; }
     public int TotalActions { get; private set; }
     public bool IsRunning => State != ExecutionState.Idle && State != ExecutionState.Done && State != ExecutionState.Stopped;
+    public string CurrentStateLabel => State.ToString();
 
     private readonly List<RetainerVisitJob> jobs = new();
     private int jobCursor;
@@ -44,6 +45,9 @@ public sealed unsafe class Executor : IDisposable
     private DateTime nextStepNoEarlierThan = DateTime.MinValue;
     private static readonly TimeSpan StepThrottle = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan SnapshotWait = TimeSpan.FromMilliseconds(700);
+    /// <summary>テキスト一致の SelectString エントリが見つからなかった時に諦めるタイムアウト。</summary>
+    private static readonly TimeSpan SelectStringTimeout = TimeSpan.FromSeconds(4);
+    private DateTime? waitingSince;
 
     public Executor(IFramework framework, IPluginLog log, Configuration configuration)
     {
@@ -97,7 +101,27 @@ public sealed unsafe class Executor : IDisposable
         TotalActions = jobs.Sum(j => j.Actions.Count);
         cancelRequested = false;
         StatusMessage = null;
+        waitingSince = null;
         if (jobs.Count == 0) { State = ExecutionState.Done; return; }
+
+        // smart-start: 既に対象リテイナーの SellList を開いている場合は
+        // ベル巡回をスキップして直接 PerformingAction から走る
+        if (AddonHelper.IsOpen("RetainerSellList"))
+        {
+            var rm = RetainerManager.Instance();
+            var activeName = rm != null ? rm->GetActiveRetainer()->NameString : null;
+            var firstMatchIdx = jobs.FindIndex(j => j.RetainerName == activeName);
+            if (firstMatchIdx >= 0)
+            {
+                jobCursor = firstMatchIdx;
+                currentJobActions.Clear();
+                foreach (var a in jobs[jobCursor].Actions) currentJobActions.Enqueue(a);
+                State = ExecutionState.PerformingAction;
+                log.Info($"[Restocker] Executor start (smart): mode={mode}, jobs={jobs.Count}, actions={TotalActions}, starting at active retainer '{activeName}'");
+                return;
+            }
+        }
+
         State = ExecutionState.SelectingRetainer;
         log.Info($"[Restocker] Executor start: mode={mode}, jobs={jobs.Count}, actions={TotalActions}");
     }
@@ -172,11 +196,23 @@ public sealed unsafe class Executor : IDisposable
 
     private void TickAwaitingSelectString()
     {
-        if (!AddonHelper.IsOpen("SelectString")) return;
-        // 「マーケットに出品を任せる」が含まれている SelectString = リテイナーのメニューと判定
-        if (!SelectStringHelper.HasEntry(AddonText.HaveRetainerSellItems)) return;
-        State = ExecutionState.OpeningSellList;
-        Throttle();
+        if (!AddonHelper.IsOpen("SelectString")) { waitingSince = null; return; }
+        if (waitingSince == null) waitingSince = DateTime.UtcNow;
+
+        if (SelectStringHelper.HasEntry(AddonText.HaveRetainerSellItems))
+        {
+            waitingSince = null;
+            State = ExecutionState.OpeningSellList;
+            Throttle();
+            return;
+        }
+
+        if (DateTime.UtcNow - waitingSince.Value > SelectStringTimeout)
+        {
+            var entries = SelectStringHelper.EnumerateEntries();
+            log.Warning($"[Restocker] SelectString did not contain '{AddonText.HaveRetainerSellItems}' (Addon row 5480). Entries seen: {string.Join(" | ", entries)}");
+            Stop($"sell-items entry not found in retainer menu (see /xllog for entries)");
+        }
     }
 
     private void TickOpeningSellList()
@@ -394,9 +430,21 @@ public sealed unsafe class Executor : IDisposable
 
     private void TickAwaitingSelectStringAfterSell()
     {
-        if (!AddonHelper.IsOpen("SelectString")) return;
-        State = ExecutionState.DismissingRetainer;
-        Throttle();
+        if (!AddonHelper.IsOpen("SelectString")) { waitingSince = null; return; }
+        if (waitingSince == null) waitingSince = DateTime.UtcNow;
+        if (SelectStringHelper.HasEntry(AddonText.Quit))
+        {
+            waitingSince = null;
+            State = ExecutionState.DismissingRetainer;
+            Throttle();
+            return;
+        }
+        if (DateTime.UtcNow - waitingSince.Value > SelectStringTimeout)
+        {
+            var entries = SelectStringHelper.EnumerateEntries();
+            log.Warning($"[Restocker] SelectString did not contain '{AddonText.Quit}' (Addon row 2383). Entries seen: {string.Join(" | ", entries)}");
+            Stop("quit entry not found in retainer menu");
+        }
     }
 
     private void TickDismissingRetainer()

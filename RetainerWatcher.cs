@@ -124,6 +124,18 @@ public sealed unsafe class RetainerWatcher : IDisposable
         return result;
     }
 
+    /// <summary>
+    /// 1 出品スロットあたりの最大個数。FFXIV のリテイナーマーケット側は事実上
+    /// 99/listing が上限なので、stack size がそれ以上の物（999 stack の crystal 等）も
+    /// 99 にクリップする。
+    /// </summary>
+    private static int ResolveMaxListingStack(Item row)
+    {
+        var inventoryStack = (int)row.StackSize;
+        if (inventoryStack <= 0) return 1;
+        return System.Math.Min(inventoryStack, 99);
+    }
+
     private static readonly InventoryType[] RetainerInventoryTypes =
     [
         InventoryType.RetainerPage1, InventoryType.RetainerPage2, InventoryType.RetainerPage3,
@@ -199,7 +211,7 @@ public sealed unsafe class RetainerWatcher : IDisposable
                 };
                 if (itemSheet.TryGetRow(item->ItemId, out var row))
                 {
-                    entry.MaxStackPerListing = (int)row.StackSize;
+                    entry.MaxStackPerListing = ResolveMaxListingStack(row);
                     entry.IsListable = row.ItemSearchCategory.RowId != 0;
                 }
                 result.Add(entry);
@@ -237,7 +249,7 @@ public sealed unsafe class RetainerWatcher : IDisposable
 
                 if (itemSheet.TryGetRow(item->ItemId, out var row))
                 {
-                    entry.MaxStackPerListing = (int)row.StackSize;
+                    entry.MaxStackPerListing = ResolveMaxListingStack(row);
                     // 出品可能フラグは ItemSearchCategory != 0 で近似（厳密には bind 状態など個別判定が要る）
                     entry.IsListable = row.ItemSearchCategory.RowId != 0;
                 }

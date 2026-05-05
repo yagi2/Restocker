@@ -72,11 +72,19 @@ public sealed class MainWindow : Window, IDisposable
         ImGui.TextUnformatted($"{Strings.HeaderCachedRetainers} {snapshots.Count} {Strings.HeaderRetainers} / {Strings.HeaderLastUpdated} {freshest}");
 
         ImGui.SameLine();
-        if (executor.IsRunning && executor.Mode == ExecutionMode.RefreshAll)
+        if (executor.IsRunning)
         {
-            ImGui.TextUnformatted(string.Format(Strings.HeaderRefreshing, executor.CompletedJobs, executor.TotalJobs));
+            var statusLabel = executor.Mode == ExecutionMode.RefreshAll
+                ? string.Format(Strings.HeaderRefreshing, executor.CompletedJobs, executor.TotalJobs)
+                : string.Format(Strings.ApplyProgress, executor.CompletedActions, executor.TotalActions, executor.CompletedJobs, executor.TotalJobs);
+            ImGui.TextUnformatted(statusLabel);
             ImGui.SameLine();
             if (ImGui.SmallButton(Strings.HeaderStop)) executor.Cancel();
+            if (!string.IsNullOrEmpty(executor.CurrentStateLabel))
+            {
+                ImGui.SameLine();
+                ImGui.TextDisabled($"[{executor.CurrentStateLabel}]");
+            }
         }
         else
         {
@@ -104,6 +112,12 @@ public sealed class MainWindow : Window, IDisposable
                 ImGui.SameLine();
                 ImGui.TextDisabled("(" + Strings.ToastBellNotOpen + ")");
             }
+        }
+
+        // 直近の停止理由を見える化
+        if (!string.IsNullOrEmpty(executor.StatusMessage))
+        {
+            ImGui.TextColored(new System.Numerics.Vector4(1f, 0.6f, 0.4f, 1f), $"⚠ {executor.StatusMessage}");
         }
     }
 

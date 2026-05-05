@@ -40,7 +40,7 @@ public static class Strings
     public static string WindowTitle => "Restocker";
 
     // Tabs
-    public static string TabReprice => T("Reprice", "リプライス", "Preise anpassen", "Reprix", "重新定价", "재가격");
+    public static string TabReprice => T("Update prices", "価格更新", "Preise anpassen", "Mettre à jour les prix", "更新价格", "가격 갱신");
     public static string TabList    => T("List items", "新規出品", "Einstellen", "Mettre en vente", "上架", "등록");
     public static string TabSettings => T("Settings", "設定", "Einstellungen", "Paramètres", "设置", "설정");
 
@@ -82,14 +82,21 @@ public static class Strings
         "打开雇员铃→召唤雇员→打开寄售列表，物品将出现在此处。",
         "벨을 열고 리테이너를 소환해 판매 목록을 열면 여기에 표시됩니다.");
 
-    // Reprice tab
+    // Update prices tab
     public static string RepriceMatchLowest => T(
-        "Apply -1 gil to all rows",
-        "全行に最安値 -1ギルを適用",
-        "-1 Gil auf alle Zeilen anwenden",
-        "Appliquer -1 gil à toutes les lignes",
-        "全部行应用最低价 -1 金币",
-        "전체 행에 최저가 -1길 적용");
+        "-1 gil to all rows",
+        "全行に最安値 -1ギル",
+        "-1 Gil auf alle Zeilen",
+        "-1 gil à toutes les lignes",
+        "全部行 -1 金币",
+        "전체 행에 -1길");
+    public static string RepriceMatchLowestThisRetainer => T(
+        "-1 gil (this retainer)",
+        "このリテイナーに -1ギル",
+        "-1 Gil (nur dieser Gehilfe)",
+        "-1 gil (cet intendant)",
+        "本雇员 -1 金币",
+        "이 리테이너에 -1길");
     public static string ApplyWithCount => T("{0} ({1})", "{0} ({1}件)", "{0} ({1})", "{0} ({1})", "{0} ({1})", "{0} ({1})");
     public static string MatchAppliedSummary => T(
         "Applied -1 gil pricing to {0}/{1} rows.",
