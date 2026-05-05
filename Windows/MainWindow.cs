@@ -9,12 +9,14 @@ namespace Restocker.Windows;
 public sealed class MainWindow : Window, IDisposable
 {
     private readonly Configuration configuration;
+    private readonly RepriceTab repriceTab;
 
     public MainWindow(Configuration configuration)
         : base("Restocker##MainWindow",
             ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
     {
         this.configuration = configuration;
+        this.repriceTab = new RepriceTab(configuration);
         SizeConstraints = new WindowSizeConstraints
         {
             MinimumSize = new Vector2(720, 420),
@@ -33,7 +35,7 @@ public sealed class MainWindow : Window, IDisposable
         {
             if (ImGui.BeginTabItem("リプライス"))
             {
-                DrawRepriceTabPlaceholder();
+                repriceTab.Draw();
                 ImGui.EndTabItem();
             }
             if (ImGui.BeginTabItem("新規出品"))
@@ -62,13 +64,6 @@ public sealed class MainWindow : Window, IDisposable
         ImGui.BeginDisabled();
         ImGui.SmallButton("全リテイナー更新（未実装）");
         ImGui.EndDisabled();
-    }
-
-    private void DrawRepriceTabPlaceholder()
-    {
-        ImGui.TextDisabled("リプライス画面は次コミット以降で実装。");
-        var totalListings = configuration.Snapshots.Values.Sum(s => s.Listings.Count);
-        ImGui.TextUnformatted($"集計（参考）: 出品中 {totalListings} 件");
     }
 
     private void DrawListTabPlaceholder()
