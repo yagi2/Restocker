@@ -61,7 +61,8 @@ public sealed class Plugin : IDalamudPlugin
             Framework,
             GameGui,
             open => MainWindow.IsOpen = open,
-            () => Configuration.AutoOpenOnBell
+            () => Configuration.AutoOpenOnBell,
+            () => RetainerWatcher.CaptureCharacterSnapshot()
         );
 
         ArDetector = new AutoRetainerDetector(PluginInterface, NotificationManager, Log);

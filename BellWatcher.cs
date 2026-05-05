@@ -14,6 +14,7 @@ public sealed unsafe class BellWatcher : IDisposable
     private readonly IGameGui gameGui;
     private readonly Func<bool> isEnabled;
     private readonly Action<bool> setMainWindowOpen;
+    private readonly Action onBellOpened;
 
     private bool lastVisible;
     private DateTime nextPoll = DateTime.MinValue;
@@ -23,12 +24,14 @@ public sealed unsafe class BellWatcher : IDisposable
         IFramework framework,
         IGameGui gameGui,
         Action<bool> setMainWindowOpen,
-        Func<bool> isEnabled)
+        Func<bool> isEnabled,
+        Action onBellOpened)
     {
         this.framework = framework;
         this.gameGui = gameGui;
         this.setMainWindowOpen = setMainWindowOpen;
         this.isEnabled = isEnabled;
+        this.onBellOpened = onBellOpened;
 
         framework.Update += OnUpdate;
     }
@@ -47,12 +50,12 @@ public sealed unsafe class BellWatcher : IDisposable
         if (now < nextPoll) return;
         nextPoll = now + pollInterval;
 
-        if (!isEnabled()) return;
-
         var visible = IsBellOpen();
         if (visible != lastVisible)
         {
-            setMainWindowOpen(visible);
+            // ウィンドウ自動開閉は AutoOpenOnBell に従う、キャラスナップショットは常に取る
+            if (isEnabled()) setMainWindowOpen(visible);
+            if (visible) onBellOpened();
             lastVisible = visible;
         }
     }

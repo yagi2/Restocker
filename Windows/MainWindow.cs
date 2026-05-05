@@ -22,8 +22,8 @@ public sealed class MainWindow : Window, IDisposable
     {
         this.configuration = configuration;
         this.executor = executor;
-        this.repriceTab = new RepriceTab(configuration);
-        this.listTab = new ListTab(configuration);
+        this.repriceTab = new RepriceTab(configuration, executor);
+        this.listTab = new ListTab(configuration, executor);
         SizeConstraints = new WindowSizeConstraints
         {
             MinimumSize = new Vector2(720, 420),

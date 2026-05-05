@@ -83,7 +83,25 @@ public static class Strings
         "벨을 열고 리테이너를 소환해 판매 목록을 열면 여기에 표시됩니다.");
 
     // Reprice tab
-    public static string RepriceMatchLowest => T("Match lowest -1 (TBD)", "全行に最安値 -1 を適用 (未実装)", "Niedrigsten -1 anwenden (TBD)", "Aligner sur le plus bas -1 (à venir)", "最低价 -1 全行（暂未）", "최저가 -1 전체 적용 (예정)");
+    public static string RepriceMatchLowest => T(
+        "Apply -1 gil to all rows",
+        "全行に最安値 -1ギルを適用",
+        "-1 Gil auf alle Zeilen anwenden",
+        "Appliquer -1 gil à toutes les lignes",
+        "全部行应用最低价 -1 金币",
+        "전체 행에 최저가 -1길 적용");
+    public static string ApplyWithCount => T("{0} ({1})", "{0} ({1}件)", "{0} ({1})", "{0} ({1})", "{0} ({1})", "{0} ({1})");
+    public static string ApplyProgress => T(
+        "Applying… action {0}/{1}, retainer {2}/{3}",
+        "適用中… アクション {0}/{1}、リテイナー {2}/{3}",
+        "Anwenden… Aktion {0}/{1}, Gehilfe {2}/{3}",
+        "Application… action {0}/{1}, intendant {2}/{3}",
+        "应用中… 操作 {0}/{1}, 雇员 {2}/{3}",
+        "적용 중… 작업 {0}/{1}, 리테이너 {2}/{3}");
+    public static string RetainerHeader => T("{0}  ({1} listings, {2})", "{0}  ({1}件 / {2})", "{0}  ({1} Posten, {2})", "{0}  ({1} mises, {2})", "{0}  ({1} 项, {2})", "{0}  ({1}건, {2})");
+    public static string RetainerHeaderInventory => T("{0}  ({1} items, {2})", "{0}  ({1}品 / {2})", "{0}  ({1} Artikel, {2})", "{0}  ({1} articles, {2})", "{0}  ({1} 物品, {2})", "{0}  ({1}품, {2})");
+    public static string CharacterInventoryHeader => T("Character bag (entrust required)", "キャラ所持品（要 預け入れ）", "Charakter-Tasche (Übergabe nötig)", "Sac du personnage (transfert requis)", "角色背包（需先寄存）", "캐릭터 가방 (위탁 필요)");
+    public static string SaddlebagHeader => T("Saddlebag (entrust required)", "サドルバッグ（要 預け入れ）", "Satteltasche (Übergabe nötig)", "Fonte (transfert requis)", "马鞍袋（需先寄存）", "새들백 (위탁 필요)");
     public static string ColExpand => T("+/-", "展開", "+/-", "+/-", "展开", "확장");
     public static string ColItem => T("Item", "アイテム", "Artikel", "Article", "物品", "아이템");
     public static string ColTotalQty => T("Qty", "合計数", "Anz.", "Qté", "数量", "수량");

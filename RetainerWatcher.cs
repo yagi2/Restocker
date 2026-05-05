@@ -131,6 +131,83 @@ public sealed unsafe class RetainerWatcher : IDisposable
         InventoryType.RetainerPage7,
     ];
 
+    private static readonly InventoryType[] CharacterBagTypes =
+    [
+        InventoryType.Inventory1, InventoryType.Inventory2,
+        InventoryType.Inventory3, InventoryType.Inventory4,
+    ];
+
+    private static readonly InventoryType[] SaddlebagTypes =
+    [
+        InventoryType.SaddleBag1, InventoryType.SaddleBag2,
+    ];
+
+    private static readonly InventoryType[] PremiumSaddlebagTypes =
+    [
+        InventoryType.PremiumSaddleBag1, InventoryType.PremiumSaddleBag2,
+    ];
+
+    /// <summary>
+    /// キャラクター側のバッグ + サドルバッグ + プレミアムサドルを読み、
+    /// <see cref="Configuration.Characters"/> に保存する。
+    /// 召喚中リテイナーが居なくても呼べる（ベル開時など）。
+    /// </summary>
+    public void CaptureCharacterSnapshot()
+    {
+        var characterId = playerState.ContentId;
+        if (characterId == 0) return;
+        var localPlayer = objectTable.LocalPlayer;
+        var name = localPlayer?.Name.TextValue ?? string.Empty;
+
+        var snapshot = new CharacterSnapshot
+        {
+            CharacterContentId = characterId,
+            CharacterName = name,
+            Bag = ReadContainers(CharacterBagTypes),
+            Saddlebag = ReadContainers(SaddlebagTypes),
+            PremiumSaddlebag = ReadContainers(PremiumSaddlebagTypes),
+            LastRefreshedUtc = DateTime.UtcNow,
+        };
+        configuration.Characters[CharacterSnapshot.MakeKey(characterId)] = snapshot;
+        configuration.Save();
+
+        log.Debug($"[Restocker] character snapshot updated: bag={snapshot.Bag.Count} saddle={snapshot.Saddlebag.Count} premium={snapshot.PremiumSaddlebag.Count}");
+    }
+
+    private List<InventoryEntry> ReadContainers(InventoryType[] types)
+    {
+        var result = new List<InventoryEntry>();
+        var im = InventoryManager.Instance();
+        if (im == null) return result;
+        var itemSheet = dataManager.GetExcelSheet<Item>();
+
+        foreach (var t in types)
+        {
+            var container = im->GetInventoryContainer(t);
+            if (container == null || !container->IsLoaded) continue;
+            for (var i = 0; i < container->Size; i++)
+            {
+                var item = container->GetInventorySlot(i);
+                if (item == null || item->ItemId == 0) continue;
+                var entry = new InventoryEntry
+                {
+                    ItemId = item->ItemId,
+                    IsHQ = (item->Flags & InventoryItem.ItemFlags.HighQuality) != 0,
+                    Quantity = (int)item->Quantity,
+                    ContainerId = (uint)t,
+                    SlotIndex = item->Slot,
+                };
+                if (itemSheet.TryGetRow(item->ItemId, out var row))
+                {
+                    entry.MaxStackPerListing = (int)row.StackSize;
+                    entry.IsListable = row.ItemSearchCategory.RowId != 0;
+                }
+                result.Add(entry);
+            }
+        }
+        return result;
+    }
+
     private List<InventoryEntry> ReadInventory()
     {
         var result = new List<InventoryEntry>();

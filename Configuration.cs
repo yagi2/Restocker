@@ -23,6 +23,12 @@ public sealed class Configuration : IPluginConfiguration
     public Dictionary<string, RetainerSnapshot> Snapshots { get; set; } = new();
 
     /// <summary>
+    /// キャラクター側の所持品スナップショット。キーは <see cref="CharacterSnapshot.MakeKey"/>。
+    /// 新規出品でキャラ側のアイテムも対象にするため。
+    /// </summary>
+    public Dictionary<string, CharacterSnapshot> Characters { get; set; } = new();
+
+    /// <summary>
     /// UI 言語。
     /// -1 = FFXIV クライアント言語に従う（ZH/KO はグローバルクライアントから返らないため EN/JA/DE/FR にフォールバック）。
     /// 0..5 = <see cref="Language"/> 列挙の値で明示指定。

@@ -1,37 +1,39 @@
 using System.Collections.Generic;
 using System.Linq;
-using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Lumina.Excel.Sheets;
 using Restocker.Data;
+using Restocker.Execution;
 using Restocker.Localization;
 using Restocker.Plan;
 
 namespace Restocker.Windows;
 
 /// <summary>
-/// 新規分割出品画面。リテイナーの所持品を横断アイテム単位で表示し、
-/// 価格を入力すると Planner が分配計画をその場で計算してプレビューする。
+/// 新規分割出品画面。**リテイナー毎の collapsing header** が top-level、
+/// 加えてキャラ所持品とサドルバッグも同じ形でセクション化される。
+/// 各セクション内のテーブルで価格を入れると、その場で Planner プレビュー。
 /// </summary>
 public sealed class ListTab
 {
     private readonly Configuration configuration;
+    private readonly Executor executor;
     private string filter = string.Empty;
     private bool listableOnly = true;
+    /// <summary>編集中の価格。キーは "{sourceKey}#{itemId}.{hq}"。</summary>
     private readonly Dictionary<string, long> editedPrice = new();
 
-    public ListTab(Configuration configuration)
+    public ListTab(Configuration configuration, Executor executor)
     {
         this.configuration = configuration;
+        this.executor = executor;
     }
 
     public void Draw()
     {
         DrawToolbar();
         ImGui.Separator();
-        DrawTable();
-        ImGui.Separator();
-        DrawApplyButton();
+        DrawSections();
     }
 
     private void DrawToolbar()
@@ -42,166 +44,283 @@ public sealed class ListTab
         ImGui.Checkbox(Strings.ListableOnly, ref listableOnly);
         ImGui.SameLine();
         ImGui.TextDisabled($"{Strings.HQNQNote} / {Strings.NoTransfer}");
+
+        // 適用ボタン
+        ImGui.SameLine();
+        DrawApplyButton();
     }
 
-    private record AggKey(uint ItemId, bool IsHQ);
-
-    private sealed class AggregatedRow
+    private void DrawApplyButton()
     {
-        public required AggKey Key;
-        public required string ItemName;
-        public required int TotalInventoryQty;
-        public required int MaxStackPerListing;
-        public required bool IsListable;
-        public required int CurrentlyListedQty;
-        public required List<RetainerSnapshot> SourceSnapshots;
-    }
-
-    private List<AggregatedRow> BuildRows()
-    {
-        var itemSheet = Plugin.DataManager.GetExcelSheet<Item>();
-
-        var groups = configuration.Snapshots.Values
-            .SelectMany(s => s.Inventory.Select(e => (Snap: s, Entry: e)))
-            .GroupBy(t => new AggKey(t.Entry.ItemId, t.Entry.IsHQ));
-
-        var rows = new List<AggregatedRow>();
-        foreach (var grp in groups)
+        // ListTab の適用は各リテイナーセクションで価格入力された行に対し Planner.PlanNewListings で展開
+        var actions = BuildPlannedActions();
+        var disabled = actions.Count == 0 || executor.IsRunning;
+        if (disabled) ImGui.BeginDisabled();
+        if (ImGui.Button(string.Format(Strings.ApplyWithCount, Strings.Apply, actions.Count)))
         {
-            var first = grp.First().Entry;
-            var name = itemSheet.TryGetRow(grp.Key.ItemId, out var row) ? row.Name.ExtractText() : $"#{grp.Key.ItemId}";
-            if (grp.Key.IsHQ) name += " (HQ)";
-
-            if (filter.Length > 0 && !name.Contains(filter, System.StringComparison.OrdinalIgnoreCase))
-                continue;
-            if (listableOnly && !first.IsListable) continue;
-
-            var listedQty = configuration.Snapshots.Values
-                .SelectMany(s => s.Listings)
-                .Where(l => l.ItemId == grp.Key.ItemId && l.IsHQ == grp.Key.IsHQ)
-                .Sum(l => l.Quantity);
-
-            rows.Add(new AggregatedRow
-            {
-                Key = grp.Key,
-                ItemName = name,
-                TotalInventoryQty = grp.Sum(t => t.Entry.Quantity),
-                MaxStackPerListing = first.MaxStackPerListing,
-                IsListable = first.IsListable,
-                CurrentlyListedQty = listedQty,
-                SourceSnapshots = grp.Select(t => t.Snap).Distinct().ToList(),
-            });
+            executor.StartApplyActions(actions);
         }
-        return rows.OrderByDescending(r => r.TotalInventoryQty).ToList();
+        if (disabled) ImGui.EndDisabled();
+
+        if (executor.IsRunning && executor.Mode == ExecutionMode.ApplyActions)
+        {
+            ImGui.SameLine();
+            ImGui.TextUnformatted(string.Format(Strings.ApplyProgress, executor.CompletedActions, executor.TotalActions, executor.CompletedJobs, executor.TotalJobs));
+            ImGui.SameLine();
+            if (ImGui.SmallButton(Strings.HeaderStop)) executor.Cancel();
+        }
     }
 
-    private void DrawTable()
+    private List<PlannedAction> BuildPlannedActions()
     {
-        if (configuration.Snapshots.Count == 0)
+        var result = new List<PlannedAction>();
+        // リテイナーソースに対しては該当リテイナーのみ Planner にかける
+        foreach (var snap in configuration.Snapshots.Values)
+        {
+            foreach (var entry in DistinctItems(snap.Inventory))
+            {
+                var key = MakePriceKey(snap.Key, entry.ItemId, entry.IsHQ);
+                if (!editedPrice.TryGetValue(key, out var price) || price <= 0) continue;
+                result.AddRange(Planner.PlanNewListings(new[] { snap }, entry.ItemId, entry.IsHQ, price, entry.MaxStackPerListing));
+            }
+        }
+        // キャラ所持品/サドルは Entrust ステップが要るので 0.1.x ではプランに含めない
+        // (Executor 側でも NewListing は skip。char inventory 経由の出品は次フェーズ)
+        return result;
+    }
+
+    private static IEnumerable<InventoryEntry> DistinctItems(IEnumerable<InventoryEntry> entries)
+    {
+        var seen = new HashSet<(uint, bool)>();
+        foreach (var e in entries)
+        {
+            if (seen.Add((e.ItemId, e.IsHQ))) yield return e;
+        }
+    }
+
+    private static string MakePriceKey(string sourceKey, uint itemId, bool isHQ)
+        => $"{sourceKey}#{itemId}.{(isHQ ? 1 : 0)}";
+
+    private void DrawSections()
+    {
+        if (configuration.Snapshots.Count == 0 && configuration.Characters.Count == 0)
         {
             ImGui.TextDisabled(Strings.EmptyHint);
             return;
         }
 
+        var size = ImGui.GetContentRegionAvail();
+        if (!ImGui.BeginChild("##list-scroll", size, false, ImGuiWindowFlags.HorizontalScrollbar))
+        {
+            ImGui.EndChild();
+            return;
+        }
+
+        // リテイナー側
+        var snapshots = configuration.Snapshots.Values
+            .OrderBy(s => s.CharacterName).ThenBy(s => s.RetainerName).ToList();
+        foreach (var snap in snapshots)
+        {
+            DrawRetainerSection(snap);
+        }
+
+        // キャラ側
+        foreach (var ch in configuration.Characters.Values.OrderBy(c => c.CharacterName))
+        {
+            DrawCharacterSection(ch);
+        }
+
+        ImGui.EndChild();
+    }
+
+    private void DrawRetainerSection(RetainerSnapshot snap)
+    {
+        var rows = AggregatePerSource(snap.Inventory, snap.Listings);
+        var filtered = ApplyFilter(rows);
+        if (filtered.Count == 0 && filter.Length > 0) return;
+
+        var header = string.Format(Strings.RetainerHeaderInventory, snap.RetainerName, filtered.Count, FreshnessSuffix(snap.LastRefreshedUtc));
+        if (!ImGui.CollapsingHeader(header + "##list-" + snap.Key, ImGuiTreeNodeFlags.DefaultOpen)) return;
+
+        DrawRowsTable(snap.Key, filtered, sourceLabel: null, isRetainerSource: true);
+    }
+
+    private void DrawCharacterSection(CharacterSnapshot ch)
+    {
+        var sourceKey = CharacterSnapshot.MakeKey(ch.CharacterContentId);
+
+        // bag
+        var bagRows = AggregatePerSource(ch.Bag, listingSource: null);
+        var bagFiltered = ApplyFilter(bagRows);
+        if (bagFiltered.Count > 0 || filter.Length == 0)
+        {
+            var header = string.Format(Strings.RetainerHeaderInventory, $"{Strings.CharacterInventoryHeader} ({ch.CharacterName})", bagFiltered.Count, FreshnessSuffix(ch.LastRefreshedUtc));
+            if (ImGui.CollapsingHeader(header + "##char-" + sourceKey))
+            {
+                DrawRowsTable(sourceKey + ".bag", bagFiltered, Strings.CharacterInventoryHeader, isRetainerSource: false);
+            }
+        }
+
+        // saddlebag
+        var saddleRows = AggregatePerSource(ch.Saddlebag.Concat(ch.PremiumSaddlebag).ToList(), listingSource: null);
+        var saddleFiltered = ApplyFilter(saddleRows);
+        if (saddleFiltered.Count > 0)
+        {
+            var header = string.Format(Strings.RetainerHeaderInventory, $"{Strings.SaddlebagHeader} ({ch.CharacterName})", saddleFiltered.Count, FreshnessSuffix(ch.LastRefreshedUtc));
+            if (ImGui.CollapsingHeader(header + "##saddle-" + sourceKey))
+            {
+                DrawRowsTable(sourceKey + ".saddle", saddleFiltered, Strings.SaddlebagHeader, isRetainerSource: false);
+            }
+        }
+    }
+
+    private sealed class Row
+    {
+        public required uint ItemId;
+        public required bool IsHQ;
+        public required string ItemName;
+        public required int Qty;
+        public required int MaxStack;
+        public required bool IsListable;
+        public required int CurrentlyListedQty; // リテイナーソースでのみ意味あり
+    }
+
+    private List<Row> AggregatePerSource(List<InventoryEntry> inventory, List<ListingEntry>? listingSource)
+    {
+        var sheet = Plugin.DataManager.GetExcelSheet<Item>();
+        var rows = new Dictionary<(uint, bool), Row>();
+        foreach (var e in inventory)
+        {
+            var key = (e.ItemId, e.IsHQ);
+            if (!rows.TryGetValue(key, out var r))
+            {
+                var name = sheet.TryGetRow(e.ItemId, out var row) ? row.Name.ExtractText() : $"#{e.ItemId}";
+                if (e.IsHQ) name += " (HQ)";
+                r = new Row
+                {
+                    ItemId = e.ItemId,
+                    IsHQ = e.IsHQ,
+                    ItemName = name,
+                    Qty = 0,
+                    MaxStack = e.MaxStackPerListing,
+                    IsListable = e.IsListable,
+                    CurrentlyListedQty = 0,
+                };
+                rows[key] = r;
+            }
+            r.Qty += e.Quantity;
+        }
+        if (listingSource != null)
+        {
+            foreach (var l in listingSource)
+            {
+                var key = (l.ItemId, l.IsHQ);
+                if (rows.TryGetValue(key, out var r)) r.CurrentlyListedQty += l.Quantity;
+            }
+        }
+        return rows.Values.OrderByDescending(r => r.Qty).ToList();
+    }
+
+    private List<Row> ApplyFilter(List<Row> rows)
+    {
+        return rows.Where(r =>
+        {
+            if (listableOnly && !r.IsListable) return false;
+            if (filter.Length > 0 && !r.ItemName.Contains(filter, System.StringComparison.OrdinalIgnoreCase)) return false;
+            return true;
+        }).ToList();
+    }
+
+    private static string FreshnessSuffix(System.DateTime utc)
+    {
+        if (utc == System.DateTime.MinValue) return Strings.HeaderUnknown;
+        var age = System.DateTime.UtcNow - utc;
+        if (age.TotalMinutes < 1) return "now";
+        if (age.TotalHours < 1) return $"{(int)age.TotalMinutes}m";
+        if (age.TotalDays < 1) return $"{(int)age.TotalHours}h";
+        return $"{(int)age.TotalDays}d";
+    }
+
+    private void DrawRowsTable(string sourceKey, List<Row> rows, string? sourceLabel, bool isRetainerSource)
+    {
         const ImGuiTableFlags flags =
             ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp |
-            ImGuiTableFlags.ScrollY | ImGuiTableFlags.NoSavedSettings;
+            ImGuiTableFlags.NoSavedSettings;
 
-        if (!ImGui.BeginTable("##list-table", 6, flags, new Vector2(0, 280)))
-            return;
+        if (!ImGui.BeginTable($"##list-table-{sourceKey}", isRetainerSource ? 6 : 4, flags)) return;
 
-        ImGui.TableSetupScrollFreeze(0, 1);
         ImGui.TableSetupColumn(Strings.ColItem, ImGuiTableColumnFlags.WidthStretch, 0.4f);
         ImGui.TableSetupColumn(Strings.ColOwned, ImGuiTableColumnFlags.WidthFixed, 70);
-        ImGui.TableSetupColumn(Strings.ColListed, ImGuiTableColumnFlags.WidthFixed, 70);
+        if (isRetainerSource)
+            ImGui.TableSetupColumn(Strings.ColListed, ImGuiTableColumnFlags.WidthFixed, 70);
         ImGui.TableSetupColumn(Strings.ColMaxStack, ImGuiTableColumnFlags.WidthFixed, 80);
         ImGui.TableSetupColumn(Strings.ColPrice, ImGuiTableColumnFlags.WidthStretch, 0.2f);
-        ImGui.TableSetupColumn(Strings.ColPlan, ImGuiTableColumnFlags.WidthStretch, 0.3f);
+        if (isRetainerSource)
+            ImGui.TableSetupColumn(Strings.ColPlan, ImGuiTableColumnFlags.WidthStretch, 0.3f);
         ImGui.TableHeadersRow();
 
-        foreach (var row in BuildRows())
+        foreach (var r in rows)
         {
-            var rowKey = $"{row.Key.ItemId}.{(row.Key.IsHQ ? 1 : 0)}";
             ImGui.TableNextRow();
+            ImGui.TableNextColumn();
+            if (r.IsListable) ImGui.TextUnformatted(r.ItemName);
+            else ImGui.TextDisabled(r.ItemName + Strings.Unsellable);
 
             ImGui.TableNextColumn();
-            if (row.IsListable) ImGui.TextUnformatted(row.ItemName);
-            else ImGui.TextDisabled(row.ItemName + Strings.Unsellable);
+            ImGui.TextUnformatted(r.Qty.ToString());
+
+            if (isRetainerSource)
+            {
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(r.CurrentlyListedQty == 0 ? "—" : r.CurrentlyListedQty.ToString());
+            }
 
             ImGui.TableNextColumn();
-            ImGui.TextUnformatted(row.TotalInventoryQty.ToString());
+            ImGui.TextUnformatted(r.MaxStack.ToString());
 
             ImGui.TableNextColumn();
-            ImGui.TextUnformatted(row.CurrentlyListedQty == 0 ? "—" : row.CurrentlyListedQty.ToString());
+            DrawPriceInput(MakePriceKey(sourceKey, r.ItemId, r.IsHQ));
 
-            ImGui.TableNextColumn();
-            ImGui.TextUnformatted(row.MaxStackPerListing.ToString());
-
-            ImGui.TableNextColumn();
-            DrawPriceInput(rowKey);
-
-            ImGui.TableNextColumn();
-            DrawPlanCell(row, rowKey);
+            if (isRetainerSource)
+            {
+                ImGui.TableNextColumn();
+                DrawPlanCell(sourceKey, r);
+            }
         }
 
         ImGui.EndTable();
     }
 
-    private void DrawPriceInput(string rowKey)
+    private void DrawPriceInput(string key)
     {
-        var v = (int)editedPrice.GetValueOrDefault(rowKey, 0);
+        var v = (int)editedPrice.GetValueOrDefault(key, 0);
         ImGui.SetNextItemWidth(-1);
-        if (ImGui.InputInt($"##list-price-{rowKey}", ref v, 0))
+        if (ImGui.InputInt($"##price-{key}", ref v, 0))
         {
             if (v < 0) v = 0;
-            editedPrice[rowKey] = v;
+            editedPrice[key] = v;
         }
     }
 
-    private void DrawPlanCell(AggregatedRow row, string rowKey)
+    private void DrawPlanCell(string sourceKey, Row r)
     {
-        var price = editedPrice.GetValueOrDefault(rowKey, 0);
-        if (price <= 0)
-        {
-            ImGui.TextDisabled("—");
-            return;
-        }
-        if (!row.IsListable)
-        {
-            ImGui.TextDisabled(Strings.Unsellable);
-            return;
-        }
+        var key = MakePriceKey(sourceKey, r.ItemId, r.IsHQ);
+        var price = editedPrice.GetValueOrDefault(key, 0);
+        if (price <= 0) { ImGui.TextDisabled("—"); return; }
+        if (!r.IsListable) { ImGui.TextDisabled(Strings.Unsellable); return; }
 
-        var plan = Planner.PlanNewListings(row.SourceSnapshots, row.Key.ItemId, row.Key.IsHQ, price, row.MaxStackPerListing);
-        var overflow = Planner.Overflow(row.SourceSnapshots, plan, row.Key.ItemId, row.Key.IsHQ);
-        var byRetainer = plan.GroupBy(p => p.RetainerKey).Select(g => $"{ShortRetainerName(g.Key)}={g.Count()}").ToList();
+        if (!configuration.Snapshots.TryGetValue(sourceKey, out var snap)) { ImGui.TextDisabled("—"); return; }
+        var plan = Planner.PlanNewListings(new[] { snap }, r.ItemId, r.IsHQ, price, r.MaxStack);
+        var overflow = Planner.Overflow(new[] { snap }, plan, r.ItemId, r.IsHQ);
         var summary = string.Format(Strings.PlanCount, plan.Count);
-        if (byRetainer.Count > 0) summary += " (" + string.Join(", ", byRetainer) + ")";
-
         if (overflow > 0)
         {
-            ImGui.TextColored(new Vector4(1f, 0.55f, 0.2f, 1f), summary + " " + string.Format(Strings.PlanOverflow, overflow));
+            ImGui.TextColored(new System.Numerics.Vector4(1f, 0.55f, 0.2f, 1f),
+                summary + " " + string.Format(Strings.PlanOverflow, overflow));
         }
         else
         {
             ImGui.TextUnformatted(summary);
         }
-    }
-
-    private string ShortRetainerName(string retainerKey)
-    {
-        if (configuration.Snapshots.TryGetValue(retainerKey, out var s) && s.RetainerName.Length > 0)
-            return s.RetainerName;
-        return retainerKey;
-    }
-
-    private void DrawApplyButton()
-    {
-        var rowsWithPrice = editedPrice.Count(kv => kv.Value > 0);
-        ImGui.TextUnformatted(string.Format(Strings.ListSummary, rowsWithPrice));
-        ImGui.SameLine();
-        ImGui.BeginDisabled();
-        ImGui.Button($"{Strings.Apply} {Strings.NotImplemented}");
-        ImGui.EndDisabled();
     }
 }

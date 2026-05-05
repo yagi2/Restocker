@@ -1,36 +1,38 @@
 using System.Collections.Generic;
 using System.Linq;
+using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Lumina.Excel.Sheets;
 using Restocker.Data;
+using Restocker.Execution;
 using Restocker.Localization;
 
 namespace Restocker.Windows;
 
 /// <summary>
-/// 出品中アイテムの一括リプライス画面。
-/// 既定はアイテム単位（ItemId × HQ）で集約 1 行、▶ で子行（リテイナー個別の各 listing）を展開。
+/// 出品中アイテムのリプライス画面。**リテイナー毎の collapsing header** が top-level、
+/// その中に当該リテイナーの listing テーブルが入る。
 /// </summary>
 public sealed class RepriceTab
 {
     private readonly Configuration configuration;
+    private readonly Executor executor;
     private string filter = string.Empty;
-    private readonly Dictionary<string, long> editedAggregatePrice = new();
-    private readonly Dictionary<string, long> editedListingPrice = new();
-    private readonly HashSet<string> expanded = new();
+    /// <summary>編集中の新価格。キーは "{retainerKey}#{listingIndex}"。</summary>
+    private readonly Dictionary<string, long> editedPrice = new();
 
-    public RepriceTab(Configuration configuration)
+    public RepriceTab(Configuration configuration, Executor executor)
     {
         this.configuration = configuration;
+        this.executor = executor;
     }
 
     public void Draw()
     {
         DrawToolbar();
         ImGui.Separator();
-        DrawTable();
-        ImGui.Separator();
-        DrawApplyButton();
+        DrawRetainers();
+        // 残り行は別個に書かない: 「適用」は ToolbarBottom で表示
     }
 
     private void DrawToolbar()
@@ -43,36 +45,58 @@ public sealed class RepriceTab
         ImGui.EndDisabled();
         ImGui.SameLine();
         ImGui.TextDisabled(Strings.HQNQNote);
+
+        // 適用ボタンを toolbar 右側に
+        ImGui.SameLine();
+        DrawApplyButton();
     }
 
-    private record AggregateKey(uint ItemId, bool IsHQ);
-
-    private List<(AggregateKey Key, string ItemName, int TotalQty, int ListingCount, List<(RetainerSnapshot Snap, ListingEntry Listing)> Children)>
-        BuildAggregateRows()
+    private void DrawApplyButton()
     {
-        var itemSheet = Plugin.DataManager.GetExcelSheet<Item>();
-        var groups = configuration.Snapshots.Values
-            .SelectMany(s => s.Listings.Select(l => (Snap: s, Listing: l)))
-            .GroupBy(t => new AggregateKey(t.Listing.ItemId, t.Listing.IsHQ));
-
-        var rows = new List<(AggregateKey, string, int, int, List<(RetainerSnapshot, ListingEntry)>)>();
-        foreach (var grp in groups)
+        var actions = BuildPlannedActions();
+        var disabled = actions.Count == 0 || executor.IsRunning;
+        if (disabled) ImGui.BeginDisabled();
+        if (ImGui.Button(string.Format(Strings.ApplyWithCount, Strings.Apply, actions.Count)))
         {
-            var name = itemSheet.TryGetRow(grp.Key.ItemId, out var row) ? row.Name.ExtractText() : $"#{grp.Key.ItemId}";
-            if (grp.Key.IsHQ) name += " (HQ)";
-
-            if (filter.Length > 0 && !name.Contains(filter, System.StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            var children = grp.OrderBy(t => t.Snap.RetainerName).ThenBy(t => t.Listing.ListingIndex).ToList();
-            var totalQty = children.Sum(t => t.Listing.Quantity);
-            var listingCount = children.Count;
-            rows.Add((grp.Key, name, totalQty, listingCount, children));
+            executor.StartApplyActions(actions);
         }
-        return rows.OrderBy(r => r.Item2).ToList();
+        if (disabled) ImGui.EndDisabled();
+
+        if (executor.IsRunning && executor.Mode == ExecutionMode.ApplyActions)
+        {
+            ImGui.SameLine();
+            ImGui.TextUnformatted(string.Format(Strings.ApplyProgress, executor.CompletedActions, executor.TotalActions, executor.CompletedJobs, executor.TotalJobs));
+            ImGui.SameLine();
+            if (ImGui.SmallButton(Strings.HeaderStop)) executor.Cancel();
+        }
     }
 
-    private void DrawTable()
+    private List<PlannedAction> BuildPlannedActions()
+    {
+        var result = new List<PlannedAction>();
+        foreach (var snap in configuration.Snapshots.Values)
+        {
+            foreach (var listing in snap.Listings)
+            {
+                var key = $"{snap.Key}#{listing.ListingIndex}";
+                if (!editedPrice.TryGetValue(key, out var price)) continue;
+                if (price <= 0) continue;
+                result.Add(new PlannedAction
+                {
+                    Kind = PlannedActionKind.Reprice,
+                    RetainerKey = snap.Key,
+                    ItemId = listing.ItemId,
+                    IsHQ = listing.IsHQ,
+                    Quantity = listing.Quantity,
+                    UnitPrice = price,
+                    ListingIndex = listing.ListingIndex,
+                });
+            }
+        }
+        return result;
+    }
+
+    private void DrawRetainers()
     {
         if (configuration.Snapshots.Count == 0)
         {
@@ -80,115 +104,98 @@ public sealed class RepriceTab
             return;
         }
 
+        // テーブル領域は残り高さフル
+        var size = ImGui.GetContentRegionAvail();
+        if (!ImGui.BeginChild("##reprice-scroll", size, false, ImGuiWindowFlags.HorizontalScrollbar))
+        {
+            ImGui.EndChild();
+            return;
+        }
+
+        var sheet = Plugin.DataManager.GetExcelSheet<Item>();
+        var snapshots = configuration.Snapshots.Values
+            .OrderBy(s => s.CharacterName).ThenBy(s => s.RetainerName).ToList();
+
+        foreach (var snap in snapshots)
+        {
+            // フィルタ済みで何も表示すべきものが無ければセクション自体を出さない
+            var filteredListings = FilterListings(snap, sheet);
+            if (filteredListings.Count == 0 && filter.Length > 0) continue;
+
+            var header = string.Format(Strings.RetainerHeader, snap.RetainerName, filteredListings.Count, FreshnessSuffix(snap));
+            if (!ImGui.CollapsingHeader(header + "##reprice-" + snap.Key, ImGuiTreeNodeFlags.DefaultOpen))
+                continue;
+
+            DrawRetainerListings(snap, filteredListings);
+        }
+
+        ImGui.EndChild();
+    }
+
+    private List<(ListingEntry Entry, string ItemName)> FilterListings(RetainerSnapshot snap, Lumina.Excel.ExcelSheet<Item> sheet)
+    {
+        var rows = new List<(ListingEntry, string)>();
+        foreach (var l in snap.Listings.OrderBy(l => l.ListingIndex))
+        {
+            var name = sheet.TryGetRow(l.ItemId, out var row) ? row.Name.ExtractText() : $"#{l.ItemId}";
+            if (l.IsHQ) name += " (HQ)";
+            if (filter.Length > 0 && !name.Contains(filter, System.StringComparison.OrdinalIgnoreCase)) continue;
+            rows.Add((l, name));
+        }
+        return rows;
+    }
+
+    private static string FreshnessSuffix(RetainerSnapshot snap)
+    {
+        if (snap.LastRefreshedUtc == System.DateTime.MinValue) return Strings.HeaderUnknown;
+        var age = System.DateTime.UtcNow - snap.LastRefreshedUtc;
+        if (age.TotalMinutes < 1) return "now";
+        if (age.TotalHours < 1) return $"{(int)age.TotalMinutes}m";
+        if (age.TotalDays < 1) return $"{(int)age.TotalHours}h";
+        return $"{(int)age.TotalDays}d";
+    }
+
+    private void DrawRetainerListings(RetainerSnapshot snap, List<(ListingEntry Entry, string ItemName)> rows)
+    {
         const ImGuiTableFlags flags =
             ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp |
-            ImGuiTableFlags.ScrollY | ImGuiTableFlags.NoSavedSettings;
+            ImGuiTableFlags.NoSavedSettings;
 
-        if (!ImGui.BeginTable("##reprice-table", 6, flags, new System.Numerics.Vector2(0, 280)))
-            return;
+        if (!ImGui.BeginTable($"##reprice-{snap.Key}", 5, flags)) return;
 
-        ImGui.TableSetupScrollFreeze(0, 1);
-        ImGui.TableSetupColumn(Strings.ColExpand, ImGuiTableColumnFlags.WidthFixed, 28);
-        ImGui.TableSetupColumn(Strings.ColItem, ImGuiTableColumnFlags.WidthStretch, 0.4f);
-        ImGui.TableSetupColumn(Strings.ColTotalQty, ImGuiTableColumnFlags.WidthFixed, 70);
-        ImGui.TableSetupColumn(Strings.ColListings, ImGuiTableColumnFlags.WidthFixed, 80);
+        ImGui.TableSetupColumn("#", ImGuiTableColumnFlags.WidthFixed, 30);
+        ImGui.TableSetupColumn(Strings.ColItem, ImGuiTableColumnFlags.WidthStretch, 0.5f);
+        ImGui.TableSetupColumn(Strings.ColTotalQty, ImGuiTableColumnFlags.WidthFixed, 60);
         ImGui.TableSetupColumn(Strings.ColCurrentPrice, ImGuiTableColumnFlags.WidthStretch, 0.25f);
-        ImGui.TableSetupColumn(Strings.ColNewPrice, ImGuiTableColumnFlags.WidthStretch, 0.2f);
+        ImGui.TableSetupColumn(Strings.ColNewPrice, ImGuiTableColumnFlags.WidthStretch, 0.25f);
         ImGui.TableHeadersRow();
 
-        var rows = BuildAggregateRows();
-        foreach (var (key, name, totalQty, listingCount, children) in rows)
+        foreach (var (l, name) in rows)
         {
-            var aggKey = $"{key.ItemId}.{(key.IsHQ ? 1 : 0)}";
             ImGui.TableNextRow();
-
             ImGui.TableNextColumn();
-            var isExpanded = expanded.Contains(aggKey);
-            if (ImGui.SmallButton((isExpanded ? "-" : "+") + "##" + aggKey))
-            {
-                if (isExpanded) expanded.Remove(aggKey);
-                else expanded.Add(aggKey);
-            }
-
+            ImGui.TextUnformatted(l.ListingIndex.ToString());
             ImGui.TableNextColumn();
             ImGui.TextUnformatted(name);
-
             ImGui.TableNextColumn();
-            ImGui.TextUnformatted(totalQty.ToString());
-
+            ImGui.TextUnformatted(l.Quantity.ToString());
             ImGui.TableNextColumn();
-            ImGui.TextUnformatted(listingCount.ToString());
-
+            ImGui.TextUnformatted(l.UnitPrice == 0 ? Strings.PriceUnknown : l.UnitPrice.ToString("N0"));
             ImGui.TableNextColumn();
-            DrawCurrentPriceCell(children);
-
-            ImGui.TableNextColumn();
-            DrawAggregatePriceInput(aggKey);
-
-            if (isExpanded)
-            {
-                foreach (var (snap, listing) in children)
-                {
-                    ImGui.TableNextRow();
-                    ImGui.TableNextColumn();
-                    ImGui.TableNextColumn();
-                    ImGui.TextDisabled($"  {snap.RetainerName} #{listing.ListingIndex}");
-                    ImGui.TableNextColumn();
-                    ImGui.TextUnformatted(listing.Quantity.ToString());
-                    ImGui.TableNextColumn();
-                    ImGui.TextDisabled("—");
-                    ImGui.TableNextColumn();
-                    ImGui.TextUnformatted(listing.UnitPrice == 0 ? Strings.PriceUnknown : listing.UnitPrice.ToString("N0"));
-                    ImGui.TableNextColumn();
-                    DrawListingPriceInput(snap.Key, listing.ListingIndex);
-                }
-            }
+            DrawPriceInput($"{snap.Key}#{l.ListingIndex}");
         }
 
         ImGui.EndTable();
     }
 
-    private static void DrawCurrentPriceCell(List<(RetainerSnapshot Snap, ListingEntry Listing)> children)
+    private void DrawPriceInput(string key)
     {
-        var prices = children.Select(c => c.Listing.UnitPrice).Where(p => p > 0).Distinct().OrderBy(p => p).ToList();
-        if (prices.Count == 0) ImGui.TextDisabled(Strings.PriceUnknown);
-        else if (prices.Count == 1) ImGui.TextUnformatted(prices[0].ToString("N0"));
-        else ImGui.TextUnformatted($"{prices[0]:N0} - {prices[^1]:N0}");
-    }
-
-    private void DrawAggregatePriceInput(string aggKey)
-    {
-        var v = (int)editedAggregatePrice.GetValueOrDefault(aggKey, 0);
+        var v = (int)editedPrice.GetValueOrDefault(key, 0);
         ImGui.SetNextItemWidth(-1);
-        if (ImGui.InputInt($"##agg-price-{aggKey}", ref v, 0))
+        if (ImGui.InputInt($"##price-{key}", ref v, 0))
         {
             if (v < 0) v = 0;
-            editedAggregatePrice[aggKey] = v;
+            editedPrice[key] = v;
         }
-    }
-
-    private void DrawListingPriceInput(string retainerKey, int listingIndex)
-    {
-        var key = $"{retainerKey}#{listingIndex}";
-        var v = (int)editedListingPrice.GetValueOrDefault(key, 0);
-        ImGui.SetNextItemWidth(-1);
-        if (ImGui.InputInt($"##list-price-{key}", ref v, 0))
-        {
-            if (v < 0) v = 0;
-            editedListingPrice[key] = v;
-        }
-    }
-
-    private void DrawApplyButton()
-    {
-        var aggCount = editedAggregatePrice.Count(kv => kv.Value > 0);
-        var listCount = editedListingPrice.Count(kv => kv.Value > 0);
-        var total = aggCount + listCount;
-
-        ImGui.TextUnformatted(string.Format(Strings.EditedSummary, aggCount, listCount));
-        ImGui.SameLine();
-        ImGui.BeginDisabled();
-        ImGui.Button($"{Strings.Apply} {Strings.NotImplemented} ({total})");
-        ImGui.EndDisabled();
     }
 }
