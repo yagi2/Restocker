@@ -1,42 +1,51 @@
 namespace Restocker.Execution;
 
-/// <summary>
-/// Executor が辿る状態。Framework.Update でフレームごとに遷移を試みる。
-/// </summary>
+public enum ExecutionMode
+{
+    /// <summary>各リテイナーを順に呼び出して SellList を一瞬開き、スナップショットを取り直すだけ。</summary>
+    RefreshAll,
+
+    /// <summary>各リテイナーで PlannedAction (Reprice / NewListing) を実行する。</summary>
+    ApplyActions,
+}
+
 public enum ExecutionState
 {
     Idle,
 
-    /// <summary>RetainerList addon が出るのを待つ。</summary>
-    AwaitingBell,
-
-    /// <summary>RetainerList から対象リテイナーを選ぶ。</summary>
+    /// <summary>RetainerList addon の確認。次のジョブのリテイナーを選ぶ。</summary>
     SelectingRetainer,
 
-    /// <summary>SelectString が出るのを待つ。</summary>
+    /// <summary>RetainerList をクリック後、SelectString が出るのを待つ。</summary>
     AwaitingSelectString,
 
-    /// <summary>SelectString で「マーケットに商品を出す」を選ぶ。</summary>
+    /// <summary>SelectString で「マーケットに出品を任せる」を選ぶ。</summary>
     OpeningSellList,
 
     /// <summary>RetainerSellList が開くのを待つ。</summary>
     AwaitingSellList,
 
-    /// <summary>このリテイナー向けの reprice / new listing を 1 件処理する。</summary>
+    /// <summary>このジョブのアクションを 1 件処理（または Refresh モードならスナップショット待ちだけ）。</summary>
     PerformingAction,
 
-    /// <summary>RetainerSellList を閉じて SelectString に戻る。</summary>
+    /// <summary>RetainerSell ダイアログが開くのを待つ。</summary>
+    AwaitingSellDialog,
+
+    /// <summary>RetainerSell ダイアログを Confirm して閉じる。</summary>
+    ConfirmingSellDialog,
+
+    /// <summary>RetainerSellList を close 操作で閉じる。</summary>
     ClosingSellList,
 
-    /// <summary>SelectString で「終了」を選ぶ。</summary>
+    /// <summary>SelectString に戻ったのを待つ。</summary>
+    AwaitingSelectStringAfterSell,
+
+    /// <summary>SelectString で「終了する」を選ぶ。</summary>
     DismissingRetainer,
 
-    /// <summary>RetainerList に戻ったのを待ち、次のリテイナーへ進む。</summary>
+    /// <summary>RetainerList に戻ったのを待つ → 次のジョブへ。</summary>
     AwaitingDismissed,
 
-    /// <summary>全アクション完了。</summary>
     Done,
-
-    /// <summary>致命的エラー / 予期せぬ addon 状態 / 中断要求で停止。</summary>
     Stopped,
 }

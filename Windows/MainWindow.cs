@@ -3,6 +3,8 @@ using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
+using Restocker.Common;
+using Restocker.Execution;
 using Restocker.Localization;
 
 namespace Restocker.Windows;
@@ -10,14 +12,16 @@ namespace Restocker.Windows;
 public sealed class MainWindow : Window, IDisposable
 {
     private readonly Configuration configuration;
+    private readonly Executor executor;
     private readonly RepriceTab repriceTab;
     private readonly ListTab listTab;
 
-    public MainWindow(Configuration configuration)
+    public MainWindow(Configuration configuration, Executor executor)
         : base($"{Strings.WindowTitle}##MainWindow",
             ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
     {
         this.configuration = configuration;
+        this.executor = executor;
         this.repriceTab = new RepriceTab(configuration);
         this.listTab = new ListTab(configuration);
         SizeConstraints = new WindowSizeConstraints
@@ -63,10 +67,41 @@ public sealed class MainWindow : Window, IDisposable
             : snapshots.Max(s => s.LastRefreshedUtc).ToLocalTime().ToString("yyyy-MM-dd HH:mm");
 
         ImGui.TextUnformatted($"{Strings.HeaderCachedRetainers} {snapshots.Count} {Strings.HeaderRetainers} / {Strings.HeaderLastUpdated} {freshest}");
+
         ImGui.SameLine();
-        ImGui.BeginDisabled();
-        ImGui.SmallButton(Strings.HeaderRefreshAll);
-        ImGui.EndDisabled();
+        if (executor.IsRunning && executor.Mode == ExecutionMode.RefreshAll)
+        {
+            ImGui.TextUnformatted(string.Format(Strings.HeaderRefreshing, executor.CompletedJobs, executor.TotalJobs));
+            ImGui.SameLine();
+            if (ImGui.SmallButton(Strings.HeaderStop)) executor.Cancel();
+        }
+        else
+        {
+            var bellOpen = AddonHelper.IsOpen("RetainerList");
+            if (!bellOpen) ImGui.BeginDisabled();
+            if (ImGui.SmallButton(Strings.HeaderRefreshAll))
+            {
+                if (Executor.ActiveRetainersInDisplayOrder().Count == 0)
+                {
+                    Plugin.NotificationManager.AddNotification(new Dalamud.Interface.ImGuiNotification.Notification
+                    {
+                        Title = Strings.WindowTitle,
+                        Content = Strings.ToastNoRetainersInBell,
+                        Type = Dalamud.Interface.ImGuiNotification.NotificationType.Warning,
+                    });
+                }
+                else
+                {
+                    executor.StartRefreshAll();
+                }
+            }
+            if (!bellOpen) ImGui.EndDisabled();
+            if (!bellOpen)
+            {
+                ImGui.SameLine();
+                ImGui.TextDisabled("(" + Strings.ToastBellNotOpen + ")");
+            }
+        }
     }
 
     private void DrawSettingsTab()

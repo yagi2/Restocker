@@ -49,7 +49,23 @@ public static class Strings
     public static string HeaderRetainers => T("retainer(s)", "リテイナー", "Gehilfe(n)", "intendant(s)", "雇员", "리테이너");
     public static string HeaderLastUpdated => T("last update", "最終更新", "letzte Aktualisierung", "dernière mise à jour", "最后更新", "최종 갱신");
     public static string HeaderUnknown => T("never", "未取得", "nie", "jamais", "未获取", "미취득");
-    public static string HeaderRefreshAll => T("Refresh all retainers (TBD)", "全リテイナー更新 (未実装)", "Alle Gehilfen aktualisieren (TBD)", "Actualiser tous (à venir)", "刷新全部雇员（暂未）", "전체 새로고침 (예정)");
+    public static string HeaderRefreshAll => T("Refresh all retainers", "全リテイナー更新", "Alle Gehilfen aktualisieren", "Actualiser tous les intendants", "刷新全部雇员", "전체 리테이너 새로고침");
+    public static string HeaderRefreshing => T("Refreshing… {0}/{1}", "更新中… {0}/{1}", "Aktualisiere… {0}/{1}", "Actualisation… {0}/{1}", "刷新中… {0}/{1}", "새로고침 중… {0}/{1}");
+    public static string HeaderStop => T("Stop", "中断", "Stopp", "Arrêter", "中断", "중단");
+    public static string ToastBellNotOpen => T(
+        "Open the retainer bell first.",
+        "先にリテイナーベルを開いてください。",
+        "Öffne zuerst die Gehilfenglocke.",
+        "Ouvre d'abord la cloche des intendants.",
+        "请先打开雇员铃。",
+        "먼저 리테이너 벨을 여세요.");
+    public static string ToastNoRetainersInBell => T(
+        "No retainers detected in the bell list.",
+        "ベルリストにリテイナーが見つかりません。",
+        "Keine Gehilfen in der Glockenliste.",
+        "Aucun intendant détecté.",
+        "未在铃列表中检测到雇员。",
+        "벨 목록에서 리테이너가 감지되지 않았습니다.");
 
     // Common
     public static string Apply => T("Apply", "適用", "Anwenden", "Appliquer", "应用", "적용");

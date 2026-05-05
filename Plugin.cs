@@ -43,7 +43,9 @@ public sealed class Plugin : IDalamudPlugin
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         Strings.SetLanguage(Configuration.ResolveLanguage(ClientState.ClientLanguage));
 
-        MainWindow = new MainWindow(Configuration);
+        Executor = new Executor(Framework, Log, Configuration);
+
+        MainWindow = new MainWindow(Configuration, Executor);
         WindowSystem.AddWindow(MainWindow);
 
         RetainerWatcher = new RetainerWatcher(
@@ -64,8 +66,6 @@ public sealed class Plugin : IDalamudPlugin
 
         ArDetector = new AutoRetainerDetector(PluginInterface, NotificationManager, Log);
         ArDetector.WarnIfPresent();
-
-        Executor = new Executor(Framework, GameGui, Log, Configuration);
 
         CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
