@@ -78,12 +78,15 @@ public sealed class Plugin : IDalamudPlugin
 
         PluginInterface.UiBuilder.Draw += WindowSystem.Draw;
         PluginInterface.UiBuilder.OpenMainUi += ToggleMainUi;
+        // 設定タブは MainWindow 内にあるので OpenConfigUi も同じウィンドウへ
+        PluginInterface.UiBuilder.OpenConfigUi += ToggleMainUi;
     }
 
     public void Dispose()
     {
         PluginInterface.UiBuilder.Draw -= WindowSystem.Draw;
         PluginInterface.UiBuilder.OpenMainUi -= ToggleMainUi;
+        PluginInterface.UiBuilder.OpenConfigUi -= ToggleMainUi;
 
         WindowSystem.RemoveAllWindows();
         MarketWatcher.Dispose();
