@@ -124,6 +124,8 @@ public sealed unsafe class Executor : IDisposable
                 case ExecutionState.OpeningSellList: TickOpeningSellList(); break;
                 case ExecutionState.AwaitingSellList: TickAwaitingSellList(); break;
                 case ExecutionState.PerformingAction: TickPerformingAction(); break;
+                case ExecutionState.AwaitingContextMenu: TickAwaitingContextMenu(); break;
+                case ExecutionState.ClickingPutUpForSale: TickClickingPutUpForSale(); break;
                 case ExecutionState.AwaitingSellDialog: TickAwaitingSellDialog(); break;
                 case ExecutionState.ConfirmingSellDialog: TickConfirmingSellDialog(); break;
                 case ExecutionState.ClosingSellList: TickClosingSellList(); break;
@@ -218,12 +220,16 @@ public sealed unsafe class Executor : IDisposable
                 Throttle();
                 return;
             case PlannedActionKind.NewListing:
-                // 新規出品はインベントリ側からの「マーケットに出品」コンテキスト発火が要る。
-                // 0.1.x の段階では ContextMenu 操作の addon シーケンスを完成しきれていないため
-                // 1 件だけ未実装として skip + 警告ログ。
-                log.Warning($"[Restocker] NewListing action skipped (not yet implemented in 0.1.x): item={action.ItemId} qty={action.Quantity}");
-                currentJobActions.Dequeue();
-                CompletedActions++;
+                // 出品元 slot を snapshot から検索 → AgentInventoryContext.OpenForItemSlot で
+                // 右クリック相当を発火 → ContextMenu の「マーケットに出品する」を click → RetainerSell へ
+                if (!OpenContextForNewListing(action))
+                {
+                    log.Warning($"[Restocker] NewListing source slot not found for item={action.ItemId}, skipping");
+                    currentJobActions.Dequeue();
+                    Throttle();
+                    return;
+                }
+                State = ExecutionState.AwaitingContextMenu;
                 Throttle();
                 return;
         }
@@ -247,16 +253,47 @@ public sealed unsafe class Executor : IDisposable
         var sell = (AddonRetainerSell*)addon;
 
         var action = currentJobActions.Peek();
-        if (action.Kind == PlannedActionKind.Reprice)
+        if (sell->AskingPrice != null)
         {
-            // 価格欄を newPrice に書き換え。Quantity は触らない。
-            if (sell->AskingPrice != null)
-            {
-                sell->AskingPrice->SetValue((int)Math.Min(action.UnitPrice, int.MaxValue));
-            }
+            sell->AskingPrice->SetValue((int)Math.Min(action.UnitPrice, int.MaxValue));
+        }
+        if (action.Kind == PlannedActionKind.NewListing && sell->Quantity != null)
+        {
+            sell->Quantity->SetValue(action.Quantity);
         }
         State = ExecutionState.ConfirmingSellDialog;
         Throttle();
+    }
+
+    private void TickAwaitingContextMenu()
+    {
+        if (!AddonHelper.IsOpen("ContextMenu")) return;
+        State = ExecutionState.ClickingPutUpForSale;
+        Throttle();
+    }
+
+    private void TickClickingPutUpForSale()
+    {
+        if (!ContextMenuHelper.ClickEntryByText(AddonText.PutUpForSale)) return;
+        State = ExecutionState.AwaitingSellDialog;
+        Throttle();
+    }
+
+    private bool OpenContextForNewListing(PlannedAction action)
+    {
+        if (!configuration.Snapshots.TryGetValue(action.RetainerKey, out var snap)) return false;
+        var match = snap.Inventory.FirstOrDefault(e =>
+            e.ItemId == action.ItemId && e.IsHQ == action.IsHQ && e.Quantity >= action.Quantity);
+        if (match == null) return false;
+
+        var sellListAddon = AddonHelper.GetVisible("RetainerSellList");
+        var addonId = sellListAddon != null ? sellListAddon->Id : (ushort)0;
+
+        var agent = FFXIVClientStructs.FFXIV.Client.UI.Agent.AgentInventoryContext.Instance();
+        if (agent == null) return false;
+        agent->OpenForItemSlot((InventoryType)match.ContainerId, match.SlotIndex, 0, addonId);
+        log.Debug($"[Restocker] OpenForItemSlot type={match.ContainerId} slot={match.SlotIndex}");
+        return true;
     }
 
     private void TickConfirmingSellDialog()

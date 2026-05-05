@@ -28,6 +28,12 @@ public enum ExecutionState
     /// <summary>このジョブのアクションを 1 件処理（または Refresh モードならスナップショット待ちだけ）。</summary>
     PerformingAction,
 
+    /// <summary>新規出品: ContextMenu が開くのを待つ。</summary>
+    AwaitingContextMenu,
+
+    /// <summary>新規出品: ContextMenu の「マーケットに出品する」を選ぶ。</summary>
+    ClickingPutUpForSale,
+
     /// <summary>RetainerSell ダイアログが開くのを待つ。</summary>
     AwaitingSellDialog,
 
