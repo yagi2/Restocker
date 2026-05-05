@@ -34,6 +34,15 @@ public enum ExecutionState
     /// <summary>新規出品: ContextMenu の「マーケットに出品する」を選ぶ。</summary>
     ClickingPutUpForSale,
 
+    /// <summary>Refresh モード: 出品中の各 listing を順に開いて AskingPrice を読む。</summary>
+    ReadingPrices,
+
+    /// <summary>Refresh モード: 価格読み取り用に開いた RetainerSell ダイアログが開くのを待つ。</summary>
+    AwaitingSellDialogForReading,
+
+    /// <summary>Refresh モード: 価格読み取り後、SellList に戻るのを待つ。</summary>
+    AwaitingSellListAfterReading,
+
     /// <summary>RetainerSell ダイアログが開くのを待つ。</summary>
     AwaitingSellDialog,
 

@@ -40,6 +40,8 @@ public sealed unsafe class Executor : IDisposable
     private readonly List<RetainerVisitJob> jobs = new();
     private int jobCursor;
     private readonly Queue<PlannedAction> currentJobActions = new();
+    private readonly Queue<int> slotsToReadPrice = new();
+    private string? readingSnapshotKey;
     private bool cancelRequested;
 
     private DateTime nextStepNoEarlierThan = DateTime.MinValue;
@@ -148,6 +150,9 @@ public sealed unsafe class Executor : IDisposable
                 case ExecutionState.OpeningSellList: TickOpeningSellList(); break;
                 case ExecutionState.AwaitingSellList: TickAwaitingSellList(); break;
                 case ExecutionState.PerformingAction: TickPerformingAction(); break;
+                case ExecutionState.ReadingPrices: TickReadingPrices(); break;
+                case ExecutionState.AwaitingSellDialogForReading: TickAwaitingSellDialogForReading(); break;
+                case ExecutionState.AwaitingSellListAfterReading: TickAwaitingSellListAfterReading(); break;
                 case ExecutionState.AwaitingContextMenu: TickAwaitingContextMenu(); break;
                 case ExecutionState.ClickingPutUpForSale: TickClickingPutUpForSale(); break;
                 case ExecutionState.AwaitingSellDialog: TickAwaitingSellDialog(); break;
@@ -229,11 +234,89 @@ public sealed unsafe class Executor : IDisposable
         // PostRequestedUpdate で snapshot が拾われるまで一拍待つ
         Wait(SnapshotWait);
 
-        // このジョブのアクションを queue 化（Refresh は空のまま）
+        if (Mode == ExecutionMode.RefreshAll)
+        {
+            // 現在価格を取るため non-empty な listing スロットを順に開いて読む
+            slotsToReadPrice.Clear();
+            readingSnapshotKey = null;
+            var activeName = jobs[jobCursor].RetainerName;
+            var snap = configuration.Snapshots.Values.FirstOrDefault(s => s.RetainerName == activeName);
+            if (snap != null)
+            {
+                readingSnapshotKey = snap.Key;
+                foreach (var l in snap.Listings.OrderBy(l => l.ListingIndex))
+                    slotsToReadPrice.Enqueue(l.ListingIndex);
+            }
+            State = ExecutionState.ReadingPrices;
+            return;
+        }
+
         currentJobActions.Clear();
         foreach (var a in jobs[jobCursor].Actions) currentJobActions.Enqueue(a);
-
         State = ExecutionState.PerformingAction;
+    }
+
+    private void TickReadingPrices()
+    {
+        if (slotsToReadPrice.Count == 0)
+        {
+            // 全 listing 読み終わり → snapshot 保存して closing へ
+            if (!string.IsNullOrEmpty(readingSnapshotKey)) configuration.Save();
+            readingSnapshotKey = null;
+            State = ExecutionState.ClosingSellList;
+            Throttle();
+            return;
+        }
+
+        var slot = slotsToReadPrice.Peek();
+        ClickListingSlot(slot);
+        State = ExecutionState.AwaitingSellDialogForReading;
+        Throttle();
+    }
+
+    private void TickAwaitingSellDialogForReading()
+    {
+        var addon = AddonHelper.GetVisible("RetainerSell");
+        if (addon == null) return;
+        var sell = (AddonRetainerSell*)addon;
+
+        var price = ReadAskingPrice(sell);
+        var slot = slotsToReadPrice.Dequeue();
+        if (price > 0 && !string.IsNullOrEmpty(readingSnapshotKey)
+            && configuration.Snapshots.TryGetValue(readingSnapshotKey, out var snap))
+        {
+            var listing = snap.Listings.FirstOrDefault(l => l.ListingIndex == slot);
+            if (listing != null) listing.UnitPrice = price;
+            log.Debug($"[Restocker] read price slot={slot} value={price}");
+        }
+        else
+        {
+            log.Warning($"[Restocker] could not read AskingPrice for slot={slot}");
+        }
+
+        // RetainerSell ダイアログを Cancel で閉じる（変更を保存しない）
+        Callback.Fire(addon, true, -1);
+        State = ExecutionState.AwaitingSellListAfterReading;
+        Throttle();
+    }
+
+    private void TickAwaitingSellListAfterReading()
+    {
+        if (AddonHelper.IsOpen("RetainerSell")) return;
+        if (!AddonHelper.IsOpen("RetainerSellList")) return;
+        State = ExecutionState.ReadingPrices;
+        Throttle();
+    }
+
+    private static long ReadAskingPrice(AddonRetainerSell* sell)
+    {
+        if (sell == null || sell->AskingPrice == null) return 0;
+        var node = sell->AskingPrice->AtkTextNode;
+        if (node == null) return 0;
+        var text = node->NodeText.ToString() ?? string.Empty;
+        var sb = new System.Text.StringBuilder(text.Length);
+        foreach (var c in text) if (c >= '0' && c <= '9') sb.Append(c);
+        return long.TryParse(sb.ToString(), out var v) ? v : 0;
     }
 
     private void TickPerformingAction()
