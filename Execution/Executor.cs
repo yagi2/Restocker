@@ -26,6 +26,9 @@ public sealed unsafe class Executor : IDisposable
     private readonly IFramework framework;
     private readonly IPluginLog log;
     private readonly Configuration configuration;
+    private readonly Restocker.Market.MarketCache? marketCache;
+    /// <summary>FetchMarketPrice 完了後に発火するコールバック。RepriceTab が -1ギル を当てる用。</summary>
+    public System.Action? OnFetchMarketCompleted;
 
     public ExecutionState State { get; private set; } = ExecutionState.Idle;
     public ExecutionMode Mode { get; private set; }
@@ -51,11 +54,12 @@ public sealed unsafe class Executor : IDisposable
     private static readonly TimeSpan SelectStringTimeout = TimeSpan.FromSeconds(4);
     private DateTime? waitingSince;
 
-    public Executor(IFramework framework, IPluginLog log, Configuration configuration)
+    public Executor(IFramework framework, IPluginLog log, Configuration configuration, Restocker.Market.MarketCache? marketCache = null)
     {
         this.framework = framework;
         this.log = log;
         this.configuration = configuration;
+        this.marketCache = marketCache;
         framework.Update += Tick;
     }
 
@@ -71,6 +75,39 @@ public sealed unsafe class Executor : IDisposable
             jobs.Add(new RetainerVisitJob { RetainerName = r, Actions = new List<PlannedAction>() });
         }
         Begin(ExecutionMode.RefreshAll);
+    }
+
+    /// <summary>
+    /// 指定したリテイナーの listings から「(itemId, isHQ) ユニーク × 1 listing slot」を抽出し、
+    /// それぞれを開いて ComparePrices で市場価格を MarketCache に取り込む。
+    /// 価格変更は行わない。完了後 <see cref="OnFetchMarketCompleted"/> を発火する。
+    /// </summary>
+    public void StartFetchMarketPricesForRetainer(string retainerKey)
+    {
+        if (IsRunning) { log.Warning("[Restocker] Executor.Start while already running"); return; }
+        if (!configuration.Snapshots.TryGetValue(retainerKey, out var snap))
+        {
+            log.Warning($"[Restocker] StartFetchMarketPricesForRetainer: unknown key {retainerKey}");
+            return;
+        }
+        var seen = new HashSet<(uint, bool)>();
+        var actions = new List<PlannedAction>();
+        foreach (var l in snap.Listings.OrderBy(l => l.ListingIndex))
+        {
+            if (!seen.Add((l.ItemId, l.IsHQ))) continue;
+            actions.Add(new PlannedAction
+            {
+                Kind = PlannedActionKind.FetchMarketPrice,
+                RetainerKey = retainerKey,
+                ItemId = l.ItemId,
+                IsHQ = l.IsHQ,
+                ListingIndex = l.ListingIndex,
+            });
+        }
+        if (actions.Count == 0) { log.Info("[Restocker] no items to fetch"); return; }
+        jobs.Clear();
+        jobs.Add(new RetainerVisitJob { RetainerName = snap.RetainerName, Actions = actions });
+        Begin(ExecutionMode.ApplyActions);
     }
 
     public void StartApplyActions(IEnumerable<PlannedAction> actions)
@@ -158,6 +195,9 @@ public sealed unsafe class Executor : IDisposable
                 case ExecutionState.AwaitingSellDialog: TickAwaitingSellDialog(); break;
                 case ExecutionState.ConfirmingSellDialog: TickConfirmingSellDialog(); break;
                 case ExecutionState.AwaitingSaddleMove: TickAwaitingSaddleMove(); break;
+                case ExecutionState.FetchAwaitingSellDialog: TickFetchAwaitingSellDialog(); break;
+                case ExecutionState.FetchAwaitingMarketData: TickFetchAwaitingMarketData(); break;
+                case ExecutionState.FetchAwaitingSellListAfter: TickFetchAwaitingSellListAfter(); break;
                 case ExecutionState.ClosingSellList: TickClosingSellList(); break;
                 case ExecutionState.AwaitingSelectStringAfterSell: TickAwaitingSelectStringAfterSell(); break;
                 case ExecutionState.DismissingRetainer: TickDismissingRetainer(); break;
@@ -319,6 +359,12 @@ public sealed unsafe class Executor : IDisposable
         var action = currentJobActions.Peek();
         switch (action.Kind)
         {
+            case PlannedActionKind.FetchMarketPrice:
+                ClickListingSlot(action.ListingIndex);
+                State = ExecutionState.FetchAwaitingSellDialog;
+                waitingSince = null;
+                Throttle();
+                return;
             case PlannedActionKind.Reprice:
                 // InventoryManager.SetRetainerMarketPrice で直接価格を書き換え。
                 // RetainerSell ダイアログを開かないので桁違いに速い。
@@ -631,6 +677,61 @@ public sealed unsafe class Executor : IDisposable
         }
         waitingSince = null;
         return true;
+    }
+
+    // ---------------- FetchMarketPrice flow ----------------
+
+    private void TickFetchAwaitingSellDialog()
+    {
+        var addon = AddonHelper.GetVisible("RetainerSell");
+        if (addon == null) return;
+
+        // ComparePrices を click。AddonRetainerSell の event id 4 (Marketbuddy 慣例)
+        Callback.Fire(addon, true, 4);
+        log.Debug("[Restocker] clicked ComparePrices");
+        State = ExecutionState.FetchAwaitingMarketData;
+        waitingSince = DateTime.UtcNow;
+        Throttle();
+    }
+
+    private void TickFetchAwaitingMarketData()
+    {
+        var action = currentJobActions.Peek();
+        var ready = marketCache != null && marketCache.HasData(action.ItemId, action.IsHQ);
+        var timeout = waitingSince != null && DateTime.UtcNow - waitingSince.Value > TimeSpan.FromSeconds(6);
+        if (!ready && !timeout) return;
+
+        if (!ready) log.Warning($"[Restocker] market fetch timeout for item={action.ItemId} hq={action.IsHQ}");
+        else log.Debug($"[Restocker] market data ready for item={action.ItemId} hq={action.IsHQ}");
+
+        // ItemSearchResult を閉じる → RetainerSell に戻る
+        var sr = AddonHelper.GetVisible("ItemSearchResult");
+        if (sr != null) Callback.Fire(sr, true, -1);
+        // RetainerSell も Cancel で閉じる (価格変更は別フェーズで SetRetainerMarketPrice 直で行うので)
+        var sell = AddonHelper.GetVisible("RetainerSell");
+        if (sell != null) Callback.Fire(sell, true, -1);
+
+        State = ExecutionState.FetchAwaitingSellListAfter;
+        waitingSince = null;
+        Throttle();
+    }
+
+    private void TickFetchAwaitingSellListAfter()
+    {
+        if (AddonHelper.IsOpen("ItemSearchResult")) return;
+        if (AddonHelper.IsOpen("RetainerSell")) return;
+        if (!AddonHelper.IsOpen("RetainerSellList")) return;
+
+        currentJobActions.Dequeue();
+        CompletedActions++;
+        // 全 fetch 完了時の callback 発火 (1 ジョブ・最後のアクション直後でも問題無い)
+        if (currentJobActions.Count == 0)
+        {
+            try { OnFetchMarketCompleted?.Invoke(); }
+            catch (Exception ex) { log.Error(ex, "[Restocker] OnFetchMarketCompleted threw"); }
+        }
+        State = ExecutionState.PerformingAction;
+        Throttle();
     }
 
     private void TickAwaitingSaddleMove()

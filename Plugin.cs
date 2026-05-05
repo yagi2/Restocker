@@ -47,8 +47,8 @@ public sealed class Plugin : IDalamudPlugin
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         Strings.SetLanguage(Configuration.ResolveLanguage(ClientState.ClientLanguage));
 
-        Executor = new Executor(Framework, Log, Configuration);
         MarketWatcher = new MarketWatcher(AddonLifecycle, Framework, Log);
+        Executor = new Executor(Framework, Log, Configuration, MarketWatcher.Cache);
 
         MainWindow = new MainWindow(Configuration, Executor, MarketWatcher);
         WindowSystem.AddWindow(MainWindow);

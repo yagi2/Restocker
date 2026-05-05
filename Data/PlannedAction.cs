@@ -41,4 +41,10 @@ public enum PlannedActionKind
 
     /// <summary>インベントリの ItemId(HQ) を Quantity 個・UnitPrice で新規出品する。</summary>
     NewListing,
+
+    /// <summary>
+    /// listing slot N のダイアログを開いて ComparePrices 経由で
+    /// マーケット相場を取得しキャッシュに入れる。価格変更は行わない。
+    /// </summary>
+    FetchMarketPrice,
 }

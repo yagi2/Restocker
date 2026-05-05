@@ -193,9 +193,12 @@ public sealed class RepriceTab
             if (!DrawCollapsingHeader("reprice-" + snap.Key, header)) continue;
 
             // このリテイナー専用の -1 ギル ボタン
+            // クリックで「ComparePrices で市場取得 → 完了後に -1ギル を適用」を自動実行
             if (ImGui.SmallButton(Strings.RepriceMatchLowestThisRetainer + "##matchlowest-" + snap.Key))
             {
-                ApplyMatchLowestForRetainer(snap);
+                var capturedSnap = snap;
+                executor.OnFetchMarketCompleted = () => ApplyMatchLowestForRetainer(capturedSnap);
+                executor.StartFetchMarketPricesForRetainer(snap.Key);
             }
             ImGui.SameLine();
             ImGui.TextDisabled(Strings.HQNQNote);

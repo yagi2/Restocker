@@ -52,6 +52,15 @@ public enum ExecutionState
     /// <summary>サドルバッグ → キャラバッグへの staging が完了するのを待つ。</summary>
     AwaitingSaddleMove,
 
+    /// <summary>FetchMarketPrices: listing slot を click して RetainerSell が出るのを待つ。</summary>
+    FetchAwaitingSellDialog,
+
+    /// <summary>FetchMarketPrices: ComparePrices を click 後、ItemSearchResult のキャッシュ更新を待つ。</summary>
+    FetchAwaitingMarketData,
+
+    /// <summary>FetchMarketPrices: ItemSearchResult / RetainerSell を閉じて SellList に戻るのを待つ。</summary>
+    FetchAwaitingSellListAfter,
+
     /// <summary>RetainerSellList を close 操作で閉じる。</summary>
     ClosingSellList,
 
