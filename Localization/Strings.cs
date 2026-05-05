@@ -91,6 +91,20 @@ public static class Strings
         "全部行应用最低价 -1 金币",
         "전체 행에 최저가 -1길 적용");
     public static string ApplyWithCount => T("{0} ({1})", "{0} ({1}件)", "{0} ({1})", "{0} ({1})", "{0} ({1})", "{0} ({1})");
+    public static string MatchAppliedSummary => T(
+        "Applied -1 gil pricing to {0}/{1} rows.",
+        "{1} 行のうち {0} 行に -1ギル価格を適用しました。",
+        "Auf {0}/{1} Zeilen -1 Gil angewandt.",
+        "-1 gil appliqué à {0}/{1} lignes.",
+        "已对 {1} 行中的 {0} 行应用 -1 金币价格。",
+        "{1}행 중 {0}행에 -1길 가격을 적용했습니다.");
+    public static string MatchAppliedSummaryWithMissing => T(
+        "Applied to {0}/{1} rows. {2} item(s) have no market data — open the market for: {3}",
+        "{1} 行中 {0} 行に適用。{2} 種類はマーケットデータ未取得 — 該当アイテムをマーケットで開いてください: {3}",
+        "{0}/{1} Zeilen angewandt. {2} ohne Marktdaten: {3}",
+        "{0}/{1} appliquées. {2} sans données de marché : {3}",
+        "已应用 {0}/{1} 行。{2} 种缺少市场数据：{3}",
+        "{1}행 중 {0}행 적용. {2}종 시장 데이터 없음: {3}");
     public static string ApplyProgress => T(
         "Applying… action {0}/{1}, retainer {2}/{3}",
         "適用中… アクション {0}/{1}、リテイナー {2}/{3}",

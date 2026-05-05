@@ -6,6 +6,7 @@ using Dalamud.Interface.Windowing;
 using Restocker.Common;
 using Restocker.Execution;
 using Restocker.Localization;
+using Restocker.Market;
 
 namespace Restocker.Windows;
 
@@ -17,13 +18,13 @@ public sealed class MainWindow : Window, IDisposable
     private readonly ListTab listTab;
     private readonly ConfirmDialog confirmDialog = new();
 
-    public MainWindow(Configuration configuration, Executor executor)
+    public MainWindow(Configuration configuration, Executor executor, MarketWatcher marketWatcher)
         : base($"{Strings.WindowTitle}##MainWindow",
             ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
     {
         this.configuration = configuration;
         this.executor = executor;
-        this.repriceTab = new RepriceTab(configuration, executor, confirmDialog);
+        this.repriceTab = new RepriceTab(configuration, executor, confirmDialog, marketWatcher.Cache);
         this.listTab = new ListTab(configuration, executor, confirmDialog);
         SizeConstraints = new WindowSizeConstraints
         {

@@ -7,6 +7,7 @@ using Dalamud.Interface.Windowing;
 using Restocker.Windows;
 using Restocker.Localization;
 using Restocker.Execution;
+using Restocker.Market;
 
 namespace Restocker;
 
@@ -37,6 +38,7 @@ public sealed class Plugin : IDalamudPlugin
     private BellWatcher BellWatcher { get; }
     private AutoRetainerDetector ArDetector { get; }
     private Executor Executor { get; }
+    private MarketWatcher MarketWatcher { get; }
 
     public Plugin()
     {
@@ -44,8 +46,9 @@ public sealed class Plugin : IDalamudPlugin
         Strings.SetLanguage(Configuration.ResolveLanguage(ClientState.ClientLanguage));
 
         Executor = new Executor(Framework, Log, Configuration);
+        MarketWatcher = new MarketWatcher(AddonLifecycle, Log);
 
-        MainWindow = new MainWindow(Configuration, Executor);
+        MainWindow = new MainWindow(Configuration, Executor, MarketWatcher);
         WindowSystem.AddWindow(MainWindow);
 
         RetainerWatcher = new RetainerWatcher(
@@ -83,6 +86,7 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.OpenMainUi -= ToggleMainUi;
 
         WindowSystem.RemoveAllWindows();
+        MarketWatcher.Dispose();
         Executor.Dispose();
         BellWatcher.Dispose();
         RetainerWatcher.Dispose();
