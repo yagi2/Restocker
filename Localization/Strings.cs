@@ -133,6 +133,8 @@ public static class Strings
         "尚无雇员快照，请先刷新。",
         "리테이너 스냅샷이 없습니다. 먼저 새로고침하세요.");
     public static string FreeSlots => T("free slot(s)", "枠空き", "Slot(s)", "places", "空格", "빈 슬롯");
+    public static string CollapseAll => T("Collapse all", "全て折りたたむ", "Alle einklappen", "Tout replier", "全部折叠", "모두 접기");
+    public static string ExpandAll => T("Expand all", "全て展開", "Alle ausklappen", "Tout déplier", "全部展开", "모두 펼치기");
     public static string ColExpand => T("+/-", "展開", "+/-", "+/-", "展开", "확장");
     public static string ColItem => T("Item", "アイテム", "Artikel", "Article", "物品", "아이템");
     public static string ColTotalQty => T("Qty", "合計数", "Anz.", "Qté", "数量", "수량");

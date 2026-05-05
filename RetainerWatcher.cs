@@ -109,14 +109,15 @@ public sealed unsafe class RetainerWatcher : IDisposable
             var item = container->GetInventorySlot(i);
             if (item == null || item->ItemId == 0) continue;
 
-            // NOTE: API 15 の InventoryItem には Price フィールドが無い。
-            // MVP では 0 を入れておき、リプライス実行時に SellDialog から現在価格を直接読む。
+            // 現在価格は InventoryManager.GetRetainerMarketPrice(slot) で直接取得
+            var price = (long)im->GetRetainerMarketPrice((short)i);
+
             result.Add(new ListingEntry
             {
                 ItemId = item->ItemId,
                 IsHQ = (item->Flags & InventoryItem.ItemFlags.HighQuality) != 0,
                 Quantity = (int)item->Quantity,
-                UnitPrice = 0,
+                UnitPrice = price,
                 ListingIndex = item->Slot,
             });
         }

@@ -49,6 +49,9 @@ public enum ExecutionState
     /// <summary>RetainerSell ダイアログを Confirm して閉じる。</summary>
     ConfirmingSellDialog,
 
+    /// <summary>サドルバッグ → キャラバッグへの staging が完了するのを待つ。</summary>
+    AwaitingSaddleMove,
+
     /// <summary>RetainerSellList を close 操作で閉じる。</summary>
     ClosingSellList,
 

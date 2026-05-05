@@ -157,6 +157,7 @@ public sealed unsafe class Executor : IDisposable
                 case ExecutionState.ClickingPutUpForSale: TickClickingPutUpForSale(); break;
                 case ExecutionState.AwaitingSellDialog: TickAwaitingSellDialog(); break;
                 case ExecutionState.ConfirmingSellDialog: TickConfirmingSellDialog(); break;
+                case ExecutionState.AwaitingSaddleMove: TickAwaitingSaddleMove(); break;
                 case ExecutionState.ClosingSellList: TickClosingSellList(); break;
                 case ExecutionState.AwaitingSelectStringAfterSell: TickAwaitingSelectStringAfterSell(); break;
                 case ExecutionState.DismissingRetainer: TickDismissingRetainer(); break;
@@ -234,23 +235,9 @@ public sealed unsafe class Executor : IDisposable
         // PostRequestedUpdate で snapshot が拾われるまで一拍待つ
         Wait(SnapshotWait);
 
-        if (Mode == ExecutionMode.RefreshAll)
-        {
-            // 現在価格を取るため non-empty な listing スロットを順に開いて読む
-            slotsToReadPrice.Clear();
-            readingSnapshotKey = null;
-            var activeName = jobs[jobCursor].RetainerName;
-            var snap = configuration.Snapshots.Values.FirstOrDefault(s => s.RetainerName == activeName);
-            if (snap != null)
-            {
-                readingSnapshotKey = snap.Key;
-                foreach (var l in snap.Listings.OrderBy(l => l.ListingIndex))
-                    slotsToReadPrice.Enqueue(l.ListingIndex);
-            }
-            State = ExecutionState.ReadingPrices;
-            return;
-        }
-
+        // Refresh / Apply 共通: RetainerWatcher が PostRequestedUpdate で
+        // GetRetainerMarketPrice 経由で各 listing の現在価格を埋めてくれるので、
+        // ここでは PerformingAction に進めば良い (Refresh は Actions 空 → 即 close)。
         currentJobActions.Clear();
         foreach (var a in jobs[jobCursor].Actions) currentJobActions.Enqueue(a);
         State = ExecutionState.PerformingAction;
@@ -333,23 +320,43 @@ public sealed unsafe class Executor : IDisposable
         switch (action.Kind)
         {
             case PlannedActionKind.Reprice:
-                // 出品中スロット click → RetainerSell が出る
-                ClickListingSlot(action.ListingIndex);
-                State = ExecutionState.AwaitingSellDialog;
-                Throttle();
-                return;
-            case PlannedActionKind.NewListing:
-                // InventoryManager.MoveToRetainerMarket でコンテキストメニュー経由せず
-                // 任意のソース (リテイナーバッグ / キャラバッグ / サドル) から直接 1 件出品。
-                // RetainerSellList が開いている前提でゲーム側が処理してくれる。
-                if (!ExecuteDirectListing(action))
+                // InventoryManager.SetRetainerMarketPrice で直接価格を書き換え。
+                // RetainerSell ダイアログを開かないので桁違いに速い。
                 {
-                    log.Warning($"[Restocker] NewListing direct move failed for item={action.ItemId} src={action.SourceKey}, skipping");
+                    var im = InventoryManager.Instance();
+                    if (im != null)
+                    {
+                        im->SetRetainerMarketPrice((short)action.ListingIndex,
+                            (uint)Math.Min(action.UnitPrice, uint.MaxValue));
+                        log.Debug($"[Restocker] SetRetainerMarketPrice slot={action.ListingIndex} price={action.UnitPrice}");
+                        CompletedActions++;
+                    }
+                    currentJobActions.Dequeue();
+                    Throttle();
+                    return;
                 }
-                else
+            case PlannedActionKind.NewListing:
+                // 1) リテイナー bag / キャラ bag (staging 済み含む) なら MoveToRetainerMarket 直接
+                if (ExecuteDirectListing(action))
                 {
                     CompletedActions++;
+                    currentJobActions.Dequeue();
+                    Throttle();
+                    return;
                 }
+                // 2) サドル source の場合は staging が要る
+                {
+                    var sourceKey = string.IsNullOrEmpty(action.SourceKey) ? action.RetainerKey : action.SourceKey;
+                    if (sourceKey.EndsWith(".saddle") && TryStageSaddleToCharBag(action))
+                    {
+                        // staging 発火 → AwaitingSaddleMove で着地を待つ。action は queue 先頭のまま
+                        State = ExecutionState.AwaitingSaddleMove;
+                        Throttle();
+                        return;
+                    }
+                }
+                // 3) どうしても無理 → skip
+                log.Warning($"[Restocker] NewListing skip (no source slot): item={action.ItemId} src={action.SourceKey}");
                 currentJobActions.Dequeue();
                 Throttle();
                 return;
@@ -456,15 +463,9 @@ public sealed unsafe class Executor : IDisposable
     {
         if (sourceKey.StartsWith("char."))
         {
-            if (sourceKey.EndsWith(".saddle"))
-            {
-                return new[]
-                {
-                    InventoryType.SaddleBag1, InventoryType.SaddleBag2,
-                    InventoryType.PremiumSaddleBag1, InventoryType.PremiumSaddleBag2,
-                };
-            }
-            // .bag (or unspecified char.*) -> player main bag
+            // saddle / bag どちらの場合も MoveToRetainerMarket は char bag からしか動かない。
+            // saddle source は staging で char bag に運んでから出品するため、
+            // 検索対象も char bag のみ (見つからなければ caller が staging に走る)。
             return new[]
             {
                 InventoryType.Inventory1, InventoryType.Inventory2,
@@ -478,6 +479,142 @@ public sealed unsafe class Executor : IDisposable
             InventoryType.RetainerPage4, InventoryType.RetainerPage5, InventoryType.RetainerPage6,
             InventoryType.RetainerPage7,
         };
+    }
+
+    private static readonly InventoryType[] SaddleContainers =
+    {
+        InventoryType.SaddleBag1, InventoryType.SaddleBag2,
+        InventoryType.PremiumSaddleBag1, InventoryType.PremiumSaddleBag2,
+    };
+
+    private static readonly InventoryType[] CharBagContainers =
+    {
+        InventoryType.Inventory1, InventoryType.Inventory2,
+        InventoryType.Inventory3, InventoryType.Inventory4,
+    };
+
+    /// <summary>
+    /// サドル所在のアイテムを「出品 1 件分だけ」キャラバッグに移動する。
+    /// SplitItem で正確に必要数だけ切り出してから MoveItemSlot で空きスロットへ。
+    /// 成功時 true。
+    /// </summary>
+    private bool TryStageSaddleToCharBag(PlannedAction action)
+    {
+        var im = InventoryManager.Instance();
+        if (im == null) return false;
+
+        // 1) 該当アイテムを持つサドルスロットを探す
+        var saddleSrcType = (InventoryType)0;
+        var saddleSrcSlot = -1;
+        var saddleSrcQty = 0;
+        foreach (var t in SaddleContainers)
+        {
+            var c = im->GetInventoryContainer(t);
+            if (c == null || !c->IsLoaded) continue;
+            for (var i = 0; i < c->Size; i++)
+            {
+                var item = c->GetInventorySlot(i);
+                if (item == null || item->ItemId != action.ItemId) continue;
+                var hq = (item->Flags & InventoryItem.ItemFlags.HighQuality) != 0;
+                if (hq != action.IsHQ) continue;
+                if (item->Quantity < action.Quantity) continue;
+                saddleSrcType = t;
+                saddleSrcSlot = i;
+                saddleSrcQty = (int)item->Quantity;
+                break;
+            }
+            if (saddleSrcSlot >= 0) break;
+        }
+        if (saddleSrcSlot < 0)
+        {
+            log.Warning($"[Restocker] saddle staging: no saddle slot has item={action.ItemId} hq={action.IsHQ} qty>={action.Quantity}");
+            return false;
+        }
+
+        // 2) キャラバッグの空きスロットを探す
+        var charBagType = (InventoryType)0;
+        var freeCharSlot = -1;
+        foreach (var t in CharBagContainers)
+        {
+            var c = im->GetInventoryContainer(t);
+            if (c == null || !c->IsLoaded) continue;
+            for (var i = 0; i < c->Size; i++)
+            {
+                var item = c->GetInventorySlot(i);
+                if (item == null) continue;
+                if (item->ItemId == 0)
+                {
+                    charBagType = t;
+                    freeCharSlot = i;
+                    break;
+                }
+            }
+            if (freeCharSlot >= 0) break;
+        }
+        if (freeCharSlot < 0)
+        {
+            log.Warning("[Restocker] saddle staging: no free char bag slot");
+            return false;
+        }
+
+        // 3) 必要数だけ切り出して空きスロットへ。
+        //    saddleSrcQty == action.Quantity の場合は丸ごと移動。
+        //    それ以上の場合は SplitItem で qty を切り出してから移動。
+        if (saddleSrcQty == action.Quantity)
+        {
+            var ret = im->MoveItemSlot(saddleSrcType, (ushort)saddleSrcSlot,
+                charBagType, (ushort)freeCharSlot, false);
+            log.Debug($"[Restocker] stage (whole) saddle={saddleSrcType}#{saddleSrcSlot} → char={charBagType}#{freeCharSlot} ret={ret}");
+        }
+        else
+        {
+            // 余剰分が char bag に残らないよう、必要数だけ split
+            var split = im->SplitItem(saddleSrcType, (ushort)saddleSrcSlot, action.Quantity);
+            log.Debug($"[Restocker] SplitItem saddle={saddleSrcType}#{saddleSrcSlot} qty={action.Quantity} ret={split}");
+            // 直後の MoveItemSlot で free スロットへ着地させる（SplitItem の挙動として、
+            // src スロットが分かれているはずなので同じ srcSlot を再指定する形にする）
+            var ret = im->MoveItemSlot(saddleSrcType, (ushort)saddleSrcSlot,
+                charBagType, (ushort)freeCharSlot, false);
+            log.Debug($"[Restocker] move-after-split → char={charBagType}#{freeCharSlot} ret={ret}");
+        }
+        waitingSince = null;
+        return true;
+    }
+
+    private void TickAwaitingSaddleMove()
+    {
+        if (currentJobActions.Count == 0)
+        {
+            State = ExecutionState.PerformingAction;
+            return;
+        }
+        var action = currentJobActions.Peek();
+        var im = InventoryManager.Instance();
+        if (im == null) { Stop("InventoryManager null"); return; }
+
+        foreach (var t in CharBagContainers)
+        {
+            var c = im->GetInventoryContainer(t);
+            if (c == null || !c->IsLoaded) continue;
+            for (var i = 0; i < c->Size; i++)
+            {
+                var item = c->GetInventorySlot(i);
+                if (item == null || item->ItemId != action.ItemId) continue;
+                var hq = (item->Flags & InventoryItem.ItemFlags.HighQuality) != 0;
+                if (hq != action.IsHQ) continue;
+                if (item->Quantity < action.Quantity) continue;
+                waitingSince = null;
+                State = ExecutionState.PerformingAction;
+                Throttle();
+                return;
+            }
+        }
+
+        if (waitingSince == null) waitingSince = DateTime.UtcNow;
+        if (DateTime.UtcNow - waitingSince.Value > TimeSpan.FromSeconds(5))
+        {
+            Stop("saddle staging timed out (server roundtrip too slow / move failed)");
+        }
     }
 
     private void TickConfirmingSellDialog()

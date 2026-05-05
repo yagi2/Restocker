@@ -49,6 +49,23 @@ public sealed class ListTab
         ImGui.SameLine();
         ImGui.Checkbox(Strings.ListableOnly, ref listableOnly);
         ImGui.SameLine();
+        if (ImGui.SmallButton(Strings.CollapseAll + "##list-collapse"))
+        {
+            foreach (var snap in configuration.Snapshots.Values)
+                collapsedSections.Add("list-" + snap.Key);
+            foreach (var ch in configuration.Characters.Values)
+            {
+                var k = CharacterSnapshot.MakeKey(ch.CharacterContentId);
+                collapsedSections.Add("char-" + k);
+                collapsedSections.Add("saddle-" + k);
+            }
+        }
+        ImGui.SameLine();
+        if (ImGui.SmallButton(Strings.ExpandAll + "##list-expand"))
+        {
+            collapsedSections.Clear();
+        }
+        ImGui.SameLine();
         ImGui.TextDisabled($"{Strings.HQNQNote} / {Strings.NoTransfer}");
 
         // 適用ボタン

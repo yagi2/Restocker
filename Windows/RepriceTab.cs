@@ -53,9 +53,20 @@ public sealed class RepriceTab
             ApplyMatchLowest();
         }
         ImGui.SameLine();
+        if (ImGui.SmallButton(Strings.CollapseAll + "##reprice-collapse"))
+        {
+            foreach (var snap in configuration.Snapshots.Values)
+                collapsedSections.Add("reprice-" + snap.Key);
+        }
+        ImGui.SameLine();
+        if (ImGui.SmallButton(Strings.ExpandAll + "##reprice-expand"))
+        {
+            collapsedSections.Clear();
+        }
+        ImGui.SameLine();
         ImGui.TextDisabled(Strings.HQNQNote);
 
-        // 適用ボタンを toolbar 右側に
+        // 適用ボタン
         ImGui.SameLine();
         DrawApplyButton();
 
