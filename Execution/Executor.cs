@@ -668,13 +668,15 @@ public sealed unsafe class Executor : IDisposable
     /// 起動時に Lumina の Item シートを name → id でメモ化する。
     /// </summary>
     private static Dictionary<string, uint>? itemNameToIdCache;
+    private static List<KeyValuePair<string, uint>>? itemNameByLengthDesc;
+    private const char HqGlyph = '';
 
     private static (uint itemId, bool isHq) ResolveItemFromDialogName(string raw)
     {
         if (string.IsNullOrEmpty(raw)) return (0, false);
 
         // FFXIV の HQ アイコンは Unicode private-use の 
-        var isHq = raw.Contains('');
+        var isHq = raw.IndexOf(HqGlyph) >= 0;
         // 表示は "<color>itemName</color>" 系の制御コードを含むことがあるので、
         // 純粋なアイテム名候補だけを抽出する
         var sb = new System.Text.StringBuilder(raw.Length);
@@ -682,7 +684,6 @@ public sealed unsafe class Executor : IDisposable
         {
             if (c < 0x20) continue;                    // 制御
             if (c >= 0xE000 && c <= 0xF8FF) continue;  // PUA (HQ アイコンなど)
-            if (c == 'H' || c == 'I') { /* keep */ }
             sb.Append(c);
         }
         var stripped = sb.ToString().Trim();
@@ -699,14 +700,19 @@ public sealed unsafe class Executor : IDisposable
                     if (string.IsNullOrEmpty(name)) continue;
                     if (!itemNameToIdCache.ContainsKey(name)) itemNameToIdCache[name] = row.RowId;
                 }
+                itemNameByLengthDesc = itemNameToIdCache.OrderByDescending(p => p.Key.Length).ToList();
             }
             catch { }
         }
         if (itemNameToIdCache.TryGetValue(stripped, out var id)) return (id, isHq);
-        // 完全一致が無ければ、cache の name が含まれる長い text から検索 (制御コード残り対策)
-        foreach (var kv in itemNameToIdCache)
+        // 完全一致が無ければ長い name から順に部分一致 (短い name の偶然一致を避ける)
+        if (itemNameByLengthDesc != null)
         {
-            if (kv.Key.Length > 1 && raw.Contains(kv.Key)) return (kv.Value, isHq);
+            foreach (var kv in itemNameByLengthDesc)
+            {
+                if (kv.Key.Length < 3) break;
+                if (stripped.Contains(kv.Key)) return (kv.Value, isHq);
+            }
         }
         return (0, isHq);
     }
