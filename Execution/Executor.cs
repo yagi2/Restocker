@@ -583,6 +583,8 @@ public sealed unsafe class Executor : IDisposable
             case PlannedActionKind.FetchMarketPrice:
                 // listing 行クリックは ContextMenu を開く。そこから「価格を変更する」
                 // を選んで初めて RetainerSell ダイアログが開く。
+                marketCache?.GetType(); // suppress unused warning if cache disabled
+                Plugin.Instance?.SetMarketWatcherExpected(action.ItemId, action.IsHQ);
                 ClickListingSlot(action.ListingIndex);
                 State = ExecutionState.AwaitingContextMenu;
                 waitingSince = null;
@@ -694,8 +696,14 @@ public sealed unsafe class Executor : IDisposable
             if (waitingSince == null) waitingSince = DateTime.UtcNow;
             else if (DateTime.UtcNow - waitingSince.Value > TimeSpan.FromSeconds(3))
             {
-                log.Warning("[Restocker] ContextMenu didn't appear after OpenForItemSlot");
-                Stop("context menu did not open");
+                // 1 件詰まっても残り全部を巻き込みたくないので、stop ではなく skip。
+                log.Warning("[Restocker] ContextMenu did not open, skipping this action");
+                if (currentJobActions.Count > 0) currentJobActions.Dequeue();
+                CompletedActions++;
+                Plugin.Instance?.ClearMarketWatcherExpected();
+                waitingSince = null;
+                State = ExecutionState.PerformingAction;
+                Throttle();
             }
             return;
         }
@@ -1097,6 +1105,9 @@ public sealed unsafe class Executor : IDisposable
 
         if (!ready) log.Warning($"[Restocker] market fetch timeout for item={action.ItemId} hq={action.IsHQ} (ItemSearchResult open={AddonHelper.IsOpen("ItemSearchResult")})");
         else log.Information($"[Restocker] market data ready for item={action.ItemId} hq={action.IsHQ}, lowest={marketCache!.GetLowest(action.ItemId, action.IsHQ)}");
+
+        // 1 件分の fetch 完了。expected フラグはクリアして、次の listing に進む。
+        Plugin.Instance?.ClearMarketWatcherExpected();
 
         // ItemSearchResult を閉じる → RetainerSell に戻る
         var sr = AddonHelper.GetVisible("ItemSearchResult");

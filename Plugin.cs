@@ -110,4 +110,9 @@ public sealed class Plugin : IDalamudPlugin
     }
 
     public void ToggleMainUi() => MainWindow.Toggle();
+
+    /// <summary>Executor 用: 自動 fetch 中に「期待アイテム」フィルタを設定。</summary>
+    public void SetMarketWatcherExpected(uint itemId, bool isHq) => MarketWatcher.SetExpectedItem(itemId, isHq);
+
+    public void ClearMarketWatcherExpected() => MarketWatcher.ClearExpectedItem();
 }

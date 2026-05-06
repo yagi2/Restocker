@@ -123,19 +123,19 @@ public static class Strings
         "이 리테이너에 -1길");
     public static string ApplyWithCount => T("{0} ({1})", "{0} ({1}件)", "{0} ({1})", "{0} ({1})", "{0} ({1})", "{0} ({1})");
     public static string MatchAppliedSummary => T(
-        "Applied -1 gil pricing to {0}/{1} rows.",
-        "{1} 行のうち {0} 行に -1ギル価格を適用しました。",
-        "Auf {0}/{1} Zeilen -1 Gil angewandt.",
-        "-1 gil appliqué à {0}/{1} lignes.",
-        "已对 {1} 行中的 {0} 行应用 -1 金币价格。",
-        "{1}행 중 {0}행에 -1길 가격을 적용했습니다.");
+        "{0} listings updated ({1} item type(s)).",
+        "{0} 件の出品に適用しました（{1} 種類）。",
+        "{0} Posten aktualisiert ({1} Artikelarten).",
+        "{0} mises à jour ({1} type(s)).",
+        "已更新 {0} 项（{1} 种）。",
+        "{0}건 적용 ({1}종).");
     public static string MatchAppliedSummaryWithMissing => T(
-        "Applied to {0}/{1} rows. {2} item(s) have no market data — open the market for: {3}",
-        "{1} 行中 {0} 行に適用。{2} 種類はマーケットデータ未取得 — 該当アイテムをマーケットで開いてください: {3}",
-        "{0}/{1} Zeilen angewandt. {2} ohne Marktdaten: {3}",
-        "{0}/{1} appliquées. {2} sans données de marché : {3}",
-        "已应用 {0}/{1} 行。{2} 种缺少市场数据：{3}",
-        "{1}행 중 {0}행 적용. {2}종 시장 데이터 없음: {3}");
+        "{0} listings updated ({1} item type(s)). {2} type(s) had no market data — open the market for: {3}",
+        "{0} 件の出品に適用（{1} 種類）。{2} 種類はマーケットデータ未取得 — 該当アイテムをマーケットで開いてください: {3}",
+        "{0} aktualisiert ({1} Arten). {2} ohne Marktdaten: {3}",
+        "{0} mises à jour ({1} types). {2} sans données de marché : {3}",
+        "已更新 {0} 项（{1} 种）。{2} 种缺少市场数据：{3}",
+        "{0}건 적용 ({1}종). {2}종 시장 데이터 없음: {3}");
     public static string ApplyProgress => T(
         "Applying… action {0}/{1}, retainer {2}/{3}",
         "適用中… アクション {0}/{1}、リテイナー {2}/{3}",

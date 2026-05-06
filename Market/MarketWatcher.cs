@@ -20,8 +20,25 @@ public sealed unsafe class MarketWatcher : IDisposable
     private readonly IPluginLog log;
     public MarketCache Cache { get; } = new();
 
-    /// <summary>同じ検索結果が複数回飛んでくる server エラー時の保護 (PennyPincher 由来)。</summary>
+    /// <summary>同じ検索結果が複数回飛んでくる server エラー時の保護。</summary>
     private int lastRequestId = -1;
+
+    /// <summary>Executor が自動 fetch している間にセットされる「期待アイテム」。
+    /// これと違う itemId の OfferingsReceived は server からの遅延着信扱いで cache 更新しない。
+    /// null のとき (= 自動 fetch 中でない) は通常通り全結果を cache に入れる。</summary>
+    private uint? expectedItemId;
+    private bool expectedIsHq;
+
+    public void SetExpectedItem(uint itemId, bool isHq)
+    {
+        expectedItemId = itemId;
+        expectedIsHq = isHq;
+    }
+
+    public void ClearExpectedItem()
+    {
+        expectedItemId = null;
+    }
 
     public MarketWatcher(IMarketBoard marketBoard, IPluginLog log)
     {
@@ -45,6 +62,15 @@ public sealed unsafe class MarketWatcher : IDisposable
 
             var itemId = offerings.ItemListings[0].ItemId;
             if (itemId == 0) return;
+
+            // 自動 fetch 中は「期待アイテム」と一致するものだけ採用する。
+            // server が古いリクエストの応答を遅延配送してくると、現在 fetch 中の
+            // listing と違うアイテムの結果が「最新の cache」になってしまうため。
+            if (expectedItemId.HasValue && itemId != expectedItemId.Value)
+            {
+                log.Information($"[Restocker] OfferingsReceived for item={itemId} ignored (expected {expectedItemId.Value})");
+                return;
+            }
 
             // デバッグ用に受信 listing をすべてログに出す。OWN マークは自リテイナーで
             // スキップされた listing。各行: HQ/NQ, price, retainerId。
