@@ -155,20 +155,15 @@ public static class Strings
     public static string PlanCount => T("{0} listings", "{0}件", "{0} Posten", "{0} mises", "{0} 项", "{0}건");
     public static string PlanOverflow => T("{0} qty cannot fit", "※{0}個 余り", "{0} überzählig", "{0} en surplus", "余 {0} 个", "{0}개 초과");
     public static string ListSummary => T("To list: {0} item type(s)", "出品予定: {0} アイテム種", "Einzustellen: {0} Artikelart(en)", "À mettre en vente : {0} type(s)", "待上架：{0} 种物品", "등록 예정: {0} 종");
-    public static string ListMatchLowest => T(
-        "List at lowest",
-        "最安値で出品",
-        "Niedrigsten als Preis",
-        "Au plus bas",
-        "以最低价上架",
-        "최저가로 등록");
-    public static string ListMatchLowestMinus1 => T(
-        "List at lowest -1g",
-        "最安値 -1ギルで出品",
-        "Niedrigsten -1 G",
-        "Au plus bas -1 g",
-        "最低价 -1g 上架",
-        "최저가 -1길로 등록");
+    public static string QuickLowest => T("low", "最安", "min", "min", "最低", "최저");
+    public static string QuickLowestMinus1 => T("-1g", "-1g", "-1G", "-1g", "-1g", "-1g");
+    public static string MarketDataNeeded => T(
+        "No market data yet — open the marketboard for this item, or run -1g on a retainer that already lists it.",
+        "マーケットデータ未取得 — 該当アイテムをマーケットボードで開くか、既存出品があるリテイナーで -1ギル を実行してください。",
+        "Keine Marktdaten — Marktbrett für diesen Artikel öffnen.",
+        "Pas de données — ouvre l'hôtel des ventes pour cet article.",
+        "无市场数据 — 请在市场板查询该物品。",
+        "시장 데이터 없음 — 시장 게시판에서 해당 아이템을 조회하세요.");
 
     // Confirm dialog
     public static string ConfirmTitle => T(

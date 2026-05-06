@@ -70,16 +70,6 @@ public sealed class ListTab
             }
         }
         ImGui.SameLine();
-        if (ImGui.Button(Strings.ListMatchLowest + "##list-lowest"))
-        {
-            ApplyMarketLowest(offset: 0);
-        }
-        ImGui.SameLine();
-        if (ImGui.Button(Strings.ListMatchLowestMinus1 + "##list-lowest-1"))
-        {
-            ApplyMarketLowest(offset: -1);
-        }
-        ImGui.SameLine();
         ImGui.TextDisabled($"{Strings.HQNQNote} / {Strings.NoTransfer}");
 
         // 適用ボタン
@@ -432,7 +422,7 @@ public sealed class ListTab
         if (isRetainerSource)
             ImGui.TableSetupColumn(Strings.ColListed, ImGuiTableColumnFlags.WidthFixed, 70);
         ImGui.TableSetupColumn(Strings.ColMaxStack, ImGuiTableColumnFlags.WidthFixed, 80);
-        ImGui.TableSetupColumn(Strings.ColPrice, ImGuiTableColumnFlags.WidthStretch, 0.2f);
+        ImGui.TableSetupColumn(Strings.ColPrice, ImGuiTableColumnFlags.WidthStretch, 0.35f);
         if (isRetainerSource)
             ImGui.TableSetupColumn(Strings.ColPlan, ImGuiTableColumnFlags.WidthStretch, 0.3f);
         ImGui.TableHeadersRow();
@@ -457,7 +447,7 @@ public sealed class ListTab
             ImGui.TextUnformatted(r.MaxStack.ToString());
 
             ImGui.TableNextColumn();
-            DrawPriceInput(MakePriceKey(sourceKey, r.ItemId, r.IsHQ));
+            DrawPriceCell(sourceKey, r);
 
             if (isRetainerSource)
             {
@@ -477,6 +467,49 @@ public sealed class ListTab
         {
             if (v < 0) v = 0;
             editedPrice[key] = v;
+        }
+    }
+
+    /// <summary>
+    /// 価格セル: 入力欄 + アイテム毎の「最安値」「-1g」クイックボタンを並べる。
+    /// </summary>
+    private void DrawPriceCell(string sourceKey, Row r)
+    {
+        var key = MakePriceKey(sourceKey, r.ItemId, r.IsHQ);
+        var v = (int)editedPrice.GetValueOrDefault(key, 0);
+        ImGui.SetNextItemWidth(90);
+        if (ImGui.InputInt($"##price-{key}", ref v, 0))
+        {
+            if (v < 0) v = 0;
+            editedPrice[key] = v;
+        }
+        ImGui.SameLine(0, 4);
+        DrawPriceQuickButtons(sourceKey, r.ItemId, r.IsHQ);
+    }
+
+    /// <summary>1 行ぶんの「最安値」/「-1ギル」クイックボタン。</summary>
+    private void DrawPriceQuickButtons(string sourceKey, uint itemId, bool isHQ)
+    {
+        var cached = marketCache.HasData(itemId, isHQ);
+        if (!cached) ImGui.BeginDisabled();
+        if (ImGui.SmallButton($"{Strings.QuickLowest}##q-{sourceKey}-{itemId}-{(isHQ ? 1 : 0)}"))
+        {
+            var lowest = marketCache.GetLowest(itemId, isHQ);
+            if (lowest > 0)
+                editedPrice[MakePriceKey(sourceKey, itemId, isHQ)] = lowest;
+        }
+        ImGui.SameLine(0, 4);
+        if (ImGui.SmallButton($"{Strings.QuickLowestMinus1}##q1-{sourceKey}-{itemId}-{(isHQ ? 1 : 0)}"))
+        {
+            var lowest = marketCache.GetLowest(itemId, isHQ);
+            if (lowest > 1)
+                editedPrice[MakePriceKey(sourceKey, itemId, isHQ)] = lowest - 1;
+        }
+        if (!cached)
+        {
+            ImGui.EndDisabled();
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip(Strings.MarketDataNeeded);
         }
     }
 
