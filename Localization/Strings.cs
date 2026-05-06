@@ -98,6 +98,14 @@ public static class Strings
         "依次获取每个挂牌的市场价并设定新价格。完成后按「应用」确认。",
         "각 등록 항목의 시세를 가져와 새 가격을 설정합니다. 이후 적용을 눌러 반영합니다.");
 
+    public static string RepriceAddAllToPlan => T(
+        "Add all to plan",
+        "全てプランに追加",
+        "Alle in Plan",
+        "Tout au plan",
+        "全部加入计划",
+        "전부 플랜에");
+
     public static string RepriceMatchLowestExactThisRetainer => T(
         "Match lowest (exact) for all items",
         "全てのアイテムを最安値で価格更新",

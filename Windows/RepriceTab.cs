@@ -1,6 +1,5 @@
 using System.Collections.Generic;
 using System.Linq;
-using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Lumina.Excel.Sheets;
 using Restocker.Data;
@@ -11,8 +10,10 @@ using Restocker.Market;
 namespace Restocker.Windows;
 
 /// <summary>
-/// 出品中アイテムのリプライス画面。**リテイナー毎の collapsing header** が top-level、
-/// その中に当該リテイナーの listing テーブルが入る。
+/// 出品中アイテムのリプライス画面。各 listing 行で「+追加」を押すとプランに積まれ、
+/// 最後に「適用」ボタンで pendingPlans を一括実行する (新規出品タブと同じ流儀)。
+/// 「全てのアイテム ...」ボタンは fetch → editedPrice 反映までを行い、その後ユーザーが
+/// 「全部プランに追加」で pendingPlans に流し込めるようにしてある。
 /// </summary>
 public sealed class RepriceTab
 {
@@ -28,6 +29,8 @@ public sealed class RepriceTab
     private readonly HashSet<string> expandedSections = new();
     /// <summary>「最安値 -Xギル」の X。セッション中のみ有効 (永続化しない)。</summary>
     private int undercutDelta = 1;
+    /// <summary>適用前のプランリスト。</summary>
+    private readonly List<RepricePlan> pendingPlans = new();
 
     public RepriceTab(Configuration configuration, Executor executor, ConfirmDialog confirmDialog, MarketCache marketCache)
     {
@@ -42,7 +45,8 @@ public sealed class RepriceTab
         DrawToolbar();
         ImGui.Separator();
         DrawRetainers();
-        // 残り行は別個に書かない: 「適用」は ToolbarBottom で表示
+        ImGui.Separator();
+        DrawPendingPlans();
     }
 
     private void DrawToolbar()
@@ -60,7 +64,6 @@ public sealed class RepriceTab
             foreach (var snap in configuration.Snapshots.Values)
                 expandedSections.Add("reprice-" + snap.Key);
         }
-        // 適用ボタン
         ImGui.SameLine();
         DrawApplyButton();
 
@@ -72,12 +75,16 @@ public sealed class RepriceTab
 
     private void DrawApplyButton()
     {
-        var actions = BuildPlannedActions();
+        var actions = BuildActionsFromPlans();
         var disabled = actions.Count == 0 || executor.IsRunning;
         if (disabled) ImGui.BeginDisabled();
         if (ImGui.Button(string.Format(Strings.ApplyWithCount, Strings.Apply, actions.Count)))
         {
-            confirmDialog.Request(actions, executor.StartApplyActions);
+            confirmDialog.Request(actions, list =>
+            {
+                executor.StartApplyActions(list);
+                pendingPlans.Clear();
+            });
         }
         if (disabled) ImGui.EndDisabled();
 
@@ -90,27 +97,21 @@ public sealed class RepriceTab
         }
     }
 
-    private List<PlannedAction> BuildPlannedActions()
+    private List<PlannedAction> BuildActionsFromPlans()
     {
         var result = new List<PlannedAction>();
-        foreach (var snap in configuration.Snapshots.Values)
+        foreach (var p in pendingPlans)
         {
-            foreach (var listing in snap.Listings)
+            result.Add(new PlannedAction
             {
-                var key = $"{snap.Key}#{listing.ListingIndex}";
-                if (!editedPrice.TryGetValue(key, out var price)) continue;
-                if (price <= 0) continue;
-                result.Add(new PlannedAction
-                {
-                    Kind = PlannedActionKind.Reprice,
-                    RetainerKey = snap.Key,
-                    ItemId = listing.ItemId,
-                    IsHQ = listing.IsHQ,
-                    Quantity = listing.Quantity,
-                    UnitPrice = price,
-                    ListingIndex = listing.ListingIndex,
-                });
-            }
+                Kind = PlannedActionKind.Reprice,
+                RetainerKey = p.RetainerKey,
+                ItemId = p.ItemId,
+                IsHQ = p.IsHQ,
+                Quantity = p.Quantity,
+                UnitPrice = p.NewPrice,
+                ListingIndex = p.ListingIndex,
+            });
         }
         return result;
     }
@@ -123,9 +124,10 @@ public sealed class RepriceTab
             return;
         }
 
-        // テーブル領域は残り高さフル
-        var size = ImGui.GetContentRegionAvail();
-        if (!ImGui.BeginChild("##reprice-scroll", size, false, ImGuiWindowFlags.HorizontalScrollbar))
+        // 上 60% を listings、下 40% を pending plans に振る
+        var avail = ImGui.GetContentRegionAvail();
+        var topHeight = System.Math.Max(160f, avail.Y * 0.6f);
+        if (!ImGui.BeginChild("##reprice-scroll", new System.Numerics.Vector2(avail.X, topHeight), false, ImGuiWindowFlags.HorizontalScrollbar))
         {
             ImGui.EndChild();
             return;
@@ -137,18 +139,13 @@ public sealed class RepriceTab
 
         foreach (var snap in snapshots)
         {
-            // フィルタ済みで何も表示すべきものが無ければセクション自体を出さない
             var filteredListings = FilterListings(snap, sheet);
             if (filteredListings.Count == 0 && filter.Length > 0) continue;
 
             var header = string.Format(Strings.RetainerHeader, snap.RetainerName, filteredListings.Count, FreshnessSuffix(snap));
             if (!DrawCollapsingHeader("reprice-" + snap.Key, header)) continue;
 
-            // 自動 fetch → 最安値ベースで editedPrice 適用。Listing 行 click を 3 引数
-            // callback で発火し、ContextMenu の「価格を変更する」→ RetainerSell →
-            // ComparePrices → ItemSearchResult → MarketCache 更新を 1 件ずつ巡回する。
-            // 完了後に offset を加味した値を editedPrice に書き込む。
-            // 「-Xギル」ボタンの X はボタン横の InputInt で都度指定 (ephemeral)。
+            // 行 1: undercut input + fetch ボタン群
             ImGui.AlignTextToFramePadding();
             ImGui.TextUnformatted("-");
             ImGui.SameLine(0, 2);
@@ -167,8 +164,7 @@ public sealed class RepriceTab
                 executor.OnFetchMarketCompleted = () => ApplyMatchLowestForRetainer(capturedSnap, offset: capturedOffset);
                 executor.StartFetchMarketPricesForRetainer(snap.Key);
             }
-            if (ImGui.IsItemHovered())
-                ImGui.SetTooltip(Strings.RepriceMatchLowestTooltip);
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip(Strings.RepriceMatchLowestTooltip);
             ImGui.SameLine();
             if (ImGui.SmallButton(Strings.RepriceMatchLowestExactThisRetainer + "##matchexact-" + snap.Key))
             {
@@ -176,8 +172,12 @@ public sealed class RepriceTab
                 executor.OnFetchMarketCompleted = () => ApplyMatchLowestForRetainer(capturedSnap, offset: 0);
                 executor.StartFetchMarketPricesForRetainer(snap.Key);
             }
-            if (ImGui.IsItemHovered())
-                ImGui.SetTooltip(Strings.RepriceMatchLowestTooltip);
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip(Strings.RepriceMatchLowestTooltip);
+            ImGui.SameLine();
+            if (ImGui.SmallButton(Strings.RepriceAddAllToPlan + "##addall-" + snap.Key))
+            {
+                AddAllEditedToPlans(snap, sheet);
+            }
 
             DrawRetainerListings(snap, filteredListings);
         }
@@ -208,10 +208,6 @@ public sealed class RepriceTab
         return $"{(int)age.TotalDays}d";
     }
 
-    /// <summary>
-    /// 折りたたみ状態を <see cref="expandedSections"/> で明示管理する CollapsingHeader。
-    /// デフォルト = 折りたたみ。ユーザーが開いたら expandedSections に追加。
-    /// </summary>
     private bool DrawCollapsingHeader(string id, string label)
     {
         var open = expandedSections.Contains(id);
@@ -225,9 +221,7 @@ public sealed class RepriceTab
         return nowOpen;
     }
 
-    /// <summary>
-    /// このリテイナーの listing にだけ MarketCache の最安値 -1ギルを適用。
-    /// </summary>
+    /// <summary>fetch 完了後に editedPrice に「最安値 + offset」を入れる。プランには勝手に積まない。</summary>
     private void ApplyMatchLowestForRetainer(RetainerSnapshot snap, long offset = -1)
     {
         var seen = new HashSet<(uint, bool)>();
@@ -271,21 +265,83 @@ public sealed class RepriceTab
                 string.Join(", ", missing.Take(5).Select(m => m.Item3)) + (missing.Count > 5 ? "…" : ""));
     }
 
+    /// <summary>このリテイナーの editedPrice 全行をまとめて pendingPlans に追加。</summary>
+    private void AddAllEditedToPlans(RetainerSnapshot snap, Lumina.Excel.ExcelSheet<Item> sheet)
+    {
+        var added = 0;
+        foreach (var listing in snap.Listings)
+        {
+            var key = $"{snap.Key}#{listing.ListingIndex}";
+            if (!editedPrice.TryGetValue(key, out var price)) continue;
+            if (price <= 0) continue;
+            if (price == listing.UnitPrice) continue; // 同額は積まない
+            var name = sheet.TryGetRow(listing.ItemId, out var row) ? row.Name.ExtractText() : $"#{listing.ItemId}";
+            if (listing.IsHQ) name += " (HQ)";
+            UpsertPlan(new RepricePlan
+            {
+                RetainerKey = snap.Key,
+                RetainerName = snap.RetainerName,
+                ItemId = listing.ItemId,
+                IsHQ = listing.IsHQ,
+                ItemName = name,
+                ListingIndex = listing.ListingIndex,
+                OldPrice = listing.UnitPrice,
+                NewPrice = price,
+                Quantity = listing.Quantity,
+            });
+            added++;
+        }
+        Plugin.Log.Information($"[Restocker] reprice plan: added/updated {added} plans for {snap.RetainerName}");
+    }
+
+    /// <summary>同じ (retainer, slot) のプランは上書き、無ければ追加。</summary>
+    private void UpsertPlan(RepricePlan plan)
+    {
+        for (var i = 0; i < pendingPlans.Count; i++)
+        {
+            var p = pendingPlans[i];
+            if (p.RetainerKey == plan.RetainerKey && p.ListingIndex == plan.ListingIndex)
+            {
+                pendingPlans[i] = plan;
+                return;
+            }
+        }
+        pendingPlans.Add(plan);
+    }
+
+    private void RemovePlanIfExists(string retainerKey, int slot)
+    {
+        for (var i = 0; i < pendingPlans.Count; i++)
+        {
+            if (pendingPlans[i].RetainerKey == retainerKey && pendingPlans[i].ListingIndex == slot)
+            {
+                pendingPlans.RemoveAt(i);
+                return;
+            }
+        }
+    }
+
+    private bool HasPlan(string retainerKey, int slot)
+        => pendingPlans.Any(p => p.RetainerKey == retainerKey && p.ListingIndex == slot);
+
     private void DrawRetainerListings(RetainerSnapshot snap, List<(ListingEntry Entry, string ItemName)> rows)
     {
         const ImGuiTableFlags flags =
             ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp |
             ImGuiTableFlags.NoSavedSettings;
 
-        if (!ImGui.BeginTable($"##reprice-{snap.Key}", 5, flags)) return;
+        // Item, Qty, Current, New, +Add = 5 + #
+        if (!ImGui.BeginTable($"##reprice-{snap.Key}", 6, flags)) return;
 
         ImGui.TableSetupColumn("#", ImGuiTableColumnFlags.WidthFixed, 30);
-        ImGui.TableSetupColumn(Strings.ColItem, ImGuiTableColumnFlags.WidthStretch, 0.5f);
+        ImGui.TableSetupColumn(Strings.ColItem, ImGuiTableColumnFlags.WidthStretch, 0.45f);
         ImGui.TableSetupColumn(Strings.ColTotalQty, ImGuiTableColumnFlags.WidthFixed, 60);
-        ImGui.TableSetupColumn(Strings.ColCurrentPrice, ImGuiTableColumnFlags.WidthStretch, 0.25f);
-        ImGui.TableSetupColumn(Strings.ColNewPrice, ImGuiTableColumnFlags.WidthStretch, 0.25f);
+        ImGui.TableSetupColumn(Strings.ColCurrentPrice, ImGuiTableColumnFlags.WidthStretch, 0.22f);
+        ImGui.TableSetupColumn(Strings.ColNewPrice, ImGuiTableColumnFlags.WidthStretch, 0.22f);
+        ImGui.TableSetupColumn("##add", ImGuiTableColumnFlags.WidthFixed, 60);
         ImGui.TableHeadersRow();
 
+        var sheet = Plugin.DataManager.GetExcelSheet<Item>();
         foreach (var (l, name) in rows)
         {
             ImGui.TableNextRow();
@@ -299,6 +355,8 @@ public sealed class RepriceTab
             ImGui.TextUnformatted(l.UnitPrice == 0 ? Strings.PriceUnknown : l.UnitPrice.ToString("N0"));
             ImGui.TableNextColumn();
             DrawPriceInput($"{snap.Key}#{l.ListingIndex}");
+            ImGui.TableNextColumn();
+            DrawAddPlanButton(snap, l, name);
         }
 
         ImGui.EndTable();
@@ -314,4 +372,100 @@ public sealed class RepriceTab
             editedPrice[key] = v;
         }
     }
+
+    private void DrawAddPlanButton(RetainerSnapshot snap, ListingEntry l, string name)
+    {
+        var key = $"{snap.Key}#{l.ListingIndex}";
+        var price = editedPrice.GetValueOrDefault(key, 0);
+        var canAdd = price > 0 && price != l.UnitPrice;
+
+        if (HasPlan(snap.Key, l.ListingIndex))
+        {
+            // 既にプランにあれば「-」(削除) を出す
+            if (ImGui.SmallButton($"-##rm-{key}"))
+                RemovePlanIfExists(snap.Key, l.ListingIndex);
+            return;
+        }
+
+        if (!canAdd) ImGui.BeginDisabled();
+        if (ImGui.SmallButton($"{Strings.AddToPlan}##add-{key}"))
+        {
+            UpsertPlan(new RepricePlan
+            {
+                RetainerKey = snap.Key,
+                RetainerName = snap.RetainerName,
+                ItemId = l.ItemId,
+                IsHQ = l.IsHQ,
+                ItemName = name,
+                ListingIndex = l.ListingIndex,
+                OldPrice = l.UnitPrice,
+                NewPrice = price,
+                Quantity = l.Quantity,
+            });
+        }
+        if (!canAdd) ImGui.EndDisabled();
+    }
+
+    private void DrawPendingPlans()
+    {
+        ImGui.TextUnformatted(string.Format(Strings.PendingPlansHeader, pendingPlans.Count));
+        ImGui.SameLine();
+        if (pendingPlans.Count > 0 && ImGui.SmallButton(Strings.ClearAllPlans + "##clear-reprice-plans"))
+        {
+            pendingPlans.Clear();
+        }
+
+        if (pendingPlans.Count == 0)
+        {
+            ImGui.TextDisabled(Strings.PendingPlansEmpty);
+            return;
+        }
+
+        const ImGuiTableFlags flags =
+            ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp |
+            ImGuiTableFlags.NoSavedSettings;
+        if (!ImGui.BeginTable("##reprice-pending", 6, flags)) return;
+        ImGui.TableSetupColumn(Strings.ColItem, ImGuiTableColumnFlags.WidthStretch, 0.4f);
+        ImGui.TableSetupColumn(Strings.ColTarget, ImGuiTableColumnFlags.WidthStretch, 0.2f);
+        ImGui.TableSetupColumn(Strings.ColTotalQty, ImGuiTableColumnFlags.WidthFixed, 60);
+        ImGui.TableSetupColumn(Strings.ColCurrentPrice, ImGuiTableColumnFlags.WidthStretch, 0.2f);
+        ImGui.TableSetupColumn(Strings.ColNewPrice, ImGuiTableColumnFlags.WidthStretch, 0.2f);
+        ImGui.TableSetupColumn("##rm", ImGuiTableColumnFlags.WidthFixed, 50);
+        ImGui.TableHeadersRow();
+
+        var removeIdx = -1;
+        for (var i = 0; i < pendingPlans.Count; i++)
+        {
+            var p = pendingPlans[i];
+            ImGui.TableNextRow();
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(p.ItemName);
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(p.RetainerName);
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(p.Quantity.ToString());
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(p.OldPrice.ToString("N0"));
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(p.NewPrice.ToString("N0"));
+            ImGui.TableNextColumn();
+            if (ImGui.SmallButton($"{Strings.PendingPlanRemove}##rmp-{i}")) removeIdx = i;
+        }
+        ImGui.EndTable();
+
+        if (removeIdx >= 0) pendingPlans.RemoveAt(removeIdx);
+    }
+}
+
+internal sealed class RepricePlan
+{
+    public string RetainerKey = string.Empty;
+    public string RetainerName = string.Empty;
+    public uint ItemId;
+    public bool IsHQ;
+    public string ItemName = string.Empty;
+    public int ListingIndex;
+    public long OldPrice;
+    public long NewPrice;
+    public int Quantity;
 }
