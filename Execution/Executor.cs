@@ -62,6 +62,10 @@ public sealed unsafe class Executor : IDisposable
 
     /// <summary>FetchAwaitingSellDialog で listing slot click を再送した記録。</summary>
     private bool fetchSlotClickRetried;
+
+    /// <summary>1 fetch ジョブ中に既に取得済みの (itemId, isHq)。同じアイテムを 2 度
+    /// 引かないために使う。Begin でクリアされる。</summary>
+    private readonly HashSet<(uint, bool)> fetchedThisSession = new();
     private static readonly TimeSpan SaddleSettleAfterStage = TimeSpan.FromSeconds(3);
 
     private DateTime nextStepNoEarlierThan = DateTime.MinValue;
@@ -222,6 +226,7 @@ public sealed unsafe class Executor : IDisposable
         StatusMessage = null;
         waitingSince = null;
         usedMarketSlots.Clear();
+        fetchedThisSession.Clear();
         if (jobs.Count == 0) { State = ExecutionState.Done; return; }
 
         // smart-start: 既に対象リテイナーの SellList を開いている場合は
@@ -1164,8 +1169,24 @@ public sealed unsafe class Executor : IDisposable
         }
         act.ItemId = resolvedItemId;
         act.IsHQ = resolvedIsHq;
+
+        // 同じ (item, hq) を 1 ジョブ中に二度引かない。listing で同種アイテムが
+        // 並んでいるとき、最初の 1 件だけ ComparePrices を発火する。
+        if (fetchedThisSession.Contains((resolvedItemId, resolvedIsHq)))
+        {
+            log.Information($"[Restocker] skip duplicate fetch for item={resolvedItemId} hq={resolvedIsHq} (already fetched this session)");
+            Callback.Fire(addon, true, -1);
+            currentJobActions.Dequeue();
+            CompletedActions++;
+            Plugin.Instance?.ClearMarketWatcherExpected();
+            State = ExecutionState.FetchAwaitingSellListAfter;
+            Throttle();
+            return;
+        }
+        fetchedThisSession.Add((resolvedItemId, resolvedIsHq));
+
         Plugin.Instance?.SetMarketWatcherExpected(resolvedItemId, resolvedIsHq);
-        // dialogName 側に HQ アイコン () が含まれることがあるので、含み判定する
+
         // ComparePrices を click。AddonRetainerSell の event id 4
         Callback.Fire(addon, true, 4);
         log.Information($"[Restocker] clicked ComparePrices for item={resolvedItemId} hq={resolvedIsHq} (row={act.ListingIndex}) dialog='{dialogName}'");
