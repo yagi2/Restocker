@@ -56,6 +56,11 @@ public sealed unsafe class Executor : IDisposable
     private bool pendingListingIsHQ;
     private int pendingListingQuantity;
 
+    /// <summary>PreStagingSaddle 用: 最後の saddle slot 移動を発火した時刻。
+    /// 最終 staging からの settle 時間を保証するため。</summary>
+    private DateTime? lastStageAt;
+    private static readonly TimeSpan SaddleSettleAfterStage = TimeSpan.FromSeconds(3);
+
     private DateTime nextStepNoEarlierThan = DateTime.MinValue;
     private static readonly TimeSpan StepThrottle = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan SnapshotWait = TimeSpan.FromMilliseconds(700);
@@ -380,13 +385,27 @@ public sealed unsafe class Executor : IDisposable
                 log.Warning($"[Restocker] pre-stage cannot stage item={k.itemId} hq={k.isHQ} (no saddle slot or no free bag slot). Continuing with what we have.");
                 continue;
             }
+            lastStageAt = DateTime.UtcNow;
             // server 側のトランザクションを待つ
             Wait(TimeSpan.FromMilliseconds(1000));
             return;
         }
 
-        // 全てのアイテム需要が満たされた (もしくは saddle 枯渇) → 出品 phase へ
+        // 全てのアイテム需要が満たされた → 最後の staging から settle 時間を確保
+        if (lastStageAt.HasValue)
+        {
+            var elapsed = DateTime.UtcNow - lastStageAt.Value;
+            if (elapsed < SaddleSettleAfterStage)
+            {
+                var remaining = SaddleSettleAfterStage - elapsed;
+                log.Information($"[Restocker] pre-staging satisfied, settling {remaining.TotalMilliseconds:F0}ms before listings");
+                Wait(remaining);
+                return;
+            }
+        }
+
         log.Information("[Restocker] pre-staging complete, starting listings");
+        lastStageAt = null;
         State = ExecutionState.PerformingAction;
         Throttle();
     }
