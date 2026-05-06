@@ -956,7 +956,7 @@ public sealed unsafe class Executor : IDisposable
         }
 
         if (waitingSince == null) waitingSince = DateTime.UtcNow;
-        if (DateTime.UtcNow - waitingSince.Value > TimeSpan.FromSeconds(5))
+        if (DateTime.UtcNow - waitingSince.Value > TimeSpan.FromSeconds(8))
         {
             log.Warning($"[Restocker] new listing not confirmed in market#{pendingListingSlot} for item={pendingListingItemId} hq={pendingListingIsHQ} qty={pendingListingQuantity} (server lag or rejected). Skipping.");
             currentJobActions.Dequeue();
@@ -991,7 +991,11 @@ public sealed unsafe class Executor : IDisposable
                 if (item->Quantity < action.Quantity) continue;
                 waitingSince = null;
                 State = ExecutionState.PerformingAction;
-                Throttle();
+                // staging 直後に MoveToRetainerMarket を投げると server がトランザクション
+                // を完了する前で出品が暗黙 reject されるケースを観測した
+                // (10 件 OK の後 staging 経由になるとすべて confirmation 失敗)。
+                // 追加で 1 秒 wait して server 側のコミットを待つ。
+                Wait(TimeSpan.FromMilliseconds(1000));
                 return;
             }
         }
