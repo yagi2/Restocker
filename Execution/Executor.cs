@@ -50,6 +50,12 @@ public sealed unsafe class Executor : IDisposable
     /// サーバ反映ラグで同じスロットを再ターゲットして "swap" 動作になることを防ぐ。</summary>
     private readonly HashSet<int> usedMarketSlots = new();
 
+    /// <summary>AwaitingNewListing 用: 直前の MoveToRetainerMarket の対象 market slot。</summary>
+    private int pendingListingSlot = -1;
+    private uint pendingListingItemId;
+    private bool pendingListingIsHQ;
+    private int pendingListingQuantity;
+
     private DateTime nextStepNoEarlierThan = DateTime.MinValue;
     private static readonly TimeSpan StepThrottle = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan SnapshotWait = TimeSpan.FromMilliseconds(700);
@@ -231,6 +237,7 @@ public sealed unsafe class Executor : IDisposable
                 case ExecutionState.AwaitingSellDialog: TickAwaitingSellDialog(); break;
                 case ExecutionState.ConfirmingSellDialog: TickConfirmingSellDialog(); break;
                 case ExecutionState.AwaitingSaddleMove: TickAwaitingSaddleMove(); break;
+                case ExecutionState.AwaitingNewListing: TickAwaitingNewListing(); break;
                 case ExecutionState.FetchAwaitingSellDialog: TickFetchAwaitingSellDialog(); break;
                 case ExecutionState.FetchAwaitingMarketData: TickFetchAwaitingMarketData(); break;
                 case ExecutionState.FetchAwaitingSellListAfter: TickFetchAwaitingSellListAfter(); break;
@@ -470,15 +477,20 @@ public sealed unsafe class Executor : IDisposable
                         return;
                     }
 
-                    if (!ExecuteDirectListing(action))
+                    if (!ExecuteDirectListing(action, suppressWarning: false, dstSlotOut: out var dstSlot))
                     {
                         log.Warning($"[Restocker] NewListing skip (direct listing failed): item={action.ItemId} hq={action.IsHQ}");
                         currentJobActions.Dequeue();
                         Throttle();
                         return;
                     }
-                    CompletedActions++;
-                    currentJobActions.Dequeue();
+                    // server 反映を確認するまで次に進まない (race condition で動作不良になるため)
+                    pendingListingSlot = dstSlot;
+                    pendingListingItemId = action.ItemId;
+                    pendingListingIsHQ = action.IsHQ;
+                    pendingListingQuantity = action.Quantity;
+                    State = ExecutionState.AwaitingNewListing;
+                    waitingSince = DateTime.UtcNow;
                     Throttle();
                     return;
                 }
@@ -610,10 +622,11 @@ public sealed unsafe class Executor : IDisposable
     /// 結局は実機の InventoryManager 全体から item を見つけたら即発火する。
     /// (UI のセクション操作ミスや snapshot stale を吸収するため。)
     /// </summary>
-    private bool ExecuteDirectListing(PlannedAction action) => ExecuteDirectListing(action, suppressWarning: false);
+    private bool ExecuteDirectListing(PlannedAction action) => ExecuteDirectListing(action, suppressWarning: false, dstSlotOut: out _);
 
-    private bool ExecuteDirectListing(PlannedAction action, bool suppressWarning)
+    private bool ExecuteDirectListing(PlannedAction action, bool suppressWarning, out int dstSlotOut)
     {
+        dstSlotOut = -1;
         var im = FFXIVClientStructs.FFXIV.Client.Game.InventoryManager.Instance();
         if (im == null) return false;
 
@@ -659,13 +672,15 @@ public sealed unsafe class Executor : IDisposable
                 if (item->Quantity < action.Quantity) continue;
 
                 var price = (uint)Math.Min(action.UnitPrice, uint.MaxValue);
+                var srcQtyBefore = item->Quantity;
                 im->MoveToRetainerMarket(
                     t, (ushort)i,
                     InventoryType.RetainerMarket, (ushort)dstSlot,
                     (uint)action.Quantity,
                     price);
                 usedMarketSlots.Add(dstSlot);
-                log.Information($"[Restocker] listed src={t}#{i}(qty {item->Quantity}) -> market#{dstSlot} qty={action.Quantity} price={price}");
+                dstSlotOut = dstSlot;
+                log.Information($"[Restocker] listed src={t}#{i}(qty before={srcQtyBefore}) -> market#{dstSlot} qty={action.Quantity} price={price}");
                 return true;
             }
         }
@@ -908,6 +923,43 @@ public sealed unsafe class Executor : IDisposable
         }
         State = ExecutionState.PerformingAction;
         Throttle();
+    }
+
+    private void TickAwaitingNewListing()
+    {
+        var im = InventoryManager.Instance();
+        if (im == null) { Stop("InventoryManager null"); return; }
+        var market = im->GetInventoryContainer(InventoryType.RetainerMarket);
+        if (market == null) { Stop("RetainerMarket container null"); return; }
+
+        // 直前に出品した market slot に該当アイテムが入って qty が一致したら confirm
+        var slot = pendingListingSlot >= 0 && pendingListingSlot < market->Size
+            ? market->GetInventorySlot(pendingListingSlot)
+            : null;
+        if (slot != null && slot->ItemId == pendingListingItemId && slot->Quantity >= pendingListingQuantity)
+        {
+            var hq = (slot->Flags & InventoryItem.ItemFlags.HighQuality) != 0;
+            if (hq == pendingListingIsHQ)
+            {
+                CompletedActions++;
+                currentJobActions.Dequeue();
+                pendingListingSlot = -1;
+                State = ExecutionState.PerformingAction;
+                Throttle();
+                return;
+            }
+        }
+
+        if (waitingSince == null) waitingSince = DateTime.UtcNow;
+        if (DateTime.UtcNow - waitingSince.Value > TimeSpan.FromSeconds(5))
+        {
+            log.Warning($"[Restocker] new listing not confirmed in market#{pendingListingSlot} for item={pendingListingItemId} hq={pendingListingIsHQ} qty={pendingListingQuantity} (server lag or rejected). Skipping.");
+            currentJobActions.Dequeue();
+            pendingListingSlot = -1;
+            waitingSince = null;
+            State = ExecutionState.PerformingAction;
+            Throttle();
+        }
     }
 
     private void TickAwaitingSaddleMove()

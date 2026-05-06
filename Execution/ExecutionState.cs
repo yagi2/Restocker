@@ -52,6 +52,9 @@ public enum ExecutionState
     /// <summary>サドルバッグ → キャラバッグへの staging が完了するのを待つ。</summary>
     AwaitingSaddleMove,
 
+    /// <summary>MoveToRetainerMarket 直後、対象 market slot に該当アイテムが server 反映されるのを待つ。</summary>
+    AwaitingNewListing,
+
     /// <summary>FetchMarketPrices: listing slot を click して RetainerSell が出るのを待つ。</summary>
     FetchAwaitingSellDialog,
 
