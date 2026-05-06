@@ -293,7 +293,7 @@ public sealed unsafe class Executor : IDisposable
         {
             var entries = SelectStringHelper.EnumerateEntries();
             var matched = idx < entries.Count ? entries[idx] : "?";
-            log.Debug($"[Restocker] SelectString matched [{idx}] = '{matched}' (all: {string.Join(" | ", entries)})");
+            log.Information($"[Restocker] SelectString matched [{idx}] = '{matched}' (all: {string.Join(" | ", entries)})");
             waitingSince = null;
             State = ExecutionState.OpeningSellList;
             Throttle();
@@ -451,7 +451,8 @@ public sealed unsafe class Executor : IDisposable
                 // server 側でアイテム移動と出品が同時にコミットされる。
                 {
                     var sellList = AddonHelper.GetVisible("RetainerSellList");
-                    log.Debug($"[Restocker] NewListing: RetainerSellList visible={sellList != null}, item={action.ItemId} hq={action.IsHQ} qty={action.Quantity} price={action.UnitPrice} src={action.SourceKey}");
+                    var retLarge = AddonHelper.GetVisible("InventoryRetainerLarge");
+                    log.Information($"[Restocker] NewListing: RetainerSellList visible={sellList != null}, InventoryRetainerLarge visible={retLarge != null}, item={action.ItemId} hq={action.IsHQ} qty={action.Quantity} price={action.UnitPrice} src={action.SourceKey}");
                     if (sellList == null)
                     {
                         log.Warning("[Restocker] NewListing: RetainerSellList is not open, cannot list");
@@ -680,7 +681,11 @@ public sealed unsafe class Executor : IDisposable
                     price);
                 usedMarketSlots.Add(dstSlot);
                 dstSlotOut = dstSlot;
-                log.Information($"[Restocker] listed src={t}#{i}(qty before={srcQtyBefore}) -> market#{dstSlot} qty={action.Quantity} price={price}");
+                // 直後に client 側の市場 slot を確認: ここで反映されないなら API が no-op
+                var srcAfter = c->GetInventorySlot(i);
+                var marketAfter = market->GetInventorySlot(dstSlot);
+                log.Information(
+                    $"[Restocker] listed src={t}#{i}(qty before={srcQtyBefore} after={srcAfter->Quantity}) -> market#{dstSlot} (item={marketAfter->ItemId} qty={marketAfter->Quantity}) requested qty={action.Quantity} price={price}");
                 return true;
             }
         }
