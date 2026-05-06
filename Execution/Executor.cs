@@ -237,6 +237,7 @@ public sealed unsafe class Executor : IDisposable
                 case ExecutionState.AwaitingSellDialog: TickAwaitingSellDialog(); break;
                 case ExecutionState.ConfirmingSellDialog: TickConfirmingSellDialog(); break;
                 case ExecutionState.AwaitingSaddleMove: TickAwaitingSaddleMove(); break;
+                case ExecutionState.PreStagingSaddle: TickPreStagingSaddle(); break;
                 case ExecutionState.AwaitingNewListing: TickAwaitingNewListing(); break;
                 case ExecutionState.FetchAwaitingSellDialog: TickFetchAwaitingSellDialog(); break;
                 case ExecutionState.FetchAwaitingMarketData: TickFetchAwaitingMarketData(); break;
@@ -330,7 +331,126 @@ public sealed unsafe class Executor : IDisposable
         // ここでは PerformingAction に進めば良い (Refresh は Actions 空 → 即 close)。
         currentJobActions.Clear();
         foreach (var a in jobs[jobCursor].Actions) currentJobActions.Enqueue(a);
+
+        // saddle source の NewListing が混じっていれば、必要量を bag に pre-staging
+        // してから出品 phase に入る。1 件ずつ stage→listing をやると server で
+        // staging のトランザクションを完了する前に出品コマンドが届いて拒否される
+        // ことが観測されているため、staging を一括で先に終わらせる方式にした。
+        if (jobs[jobCursor].Actions.Any(a =>
+            a.Kind == PlannedActionKind.NewListing && a.SourceKey.EndsWith(".saddle")))
+        {
+            log.Information("[Restocker] saddle source detected, entering PreStagingSaddle");
+            State = ExecutionState.PreStagingSaddle;
+            waitingSince = null;
+            return;
+        }
+
         State = ExecutionState.PerformingAction;
+    }
+
+    /// <summary>
+    /// 現在ジョブの全 NewListing(saddle source) 必要量を集計し、
+    /// 既に bag にある分との差分だけ saddle → bag に staging する。
+    /// 1 tick = 1 saddle slot 移動 + Wait。すべて満たされたら PerformingAction へ。
+    /// </summary>
+    private void TickPreStagingSaddle()
+    {
+        // (item, hq) ごとの必要総量
+        var needs = new Dictionary<(uint itemId, bool isHQ), int>();
+        foreach (var a in currentJobActions)
+        {
+            if (a.Kind != PlannedActionKind.NewListing) continue;
+            if (!a.SourceKey.EndsWith(".saddle")) continue;
+            var k = (a.ItemId, a.IsHQ);
+            needs[k] = (needs.TryGetValue(k, out var v) ? v : 0) + a.Quantity;
+        }
+
+        var im = InventoryManager.Instance();
+        if (im == null) { Stop("InventoryManager null"); return; }
+
+        // 1 種類でも不足していれば 1 saddle slot を bag に運んで return
+        foreach (var (k, need) in needs)
+        {
+            var inBag = TotalInCharBag(k.itemId, k.isHQ);
+            if (inBag >= need) continue;
+
+            log.Information($"[Restocker] pre-stage need item={k.itemId} hq={k.isHQ} need={need} inBag={inBag}, moving 1 saddle slot");
+            if (!StageOneSaddleSlot(k.itemId, k.isHQ))
+            {
+                log.Warning($"[Restocker] pre-stage cannot stage item={k.itemId} hq={k.isHQ} (no saddle slot or no free bag slot). Continuing with what we have.");
+                continue;
+            }
+            // server 側のトランザクションを待つ
+            Wait(TimeSpan.FromMilliseconds(1000));
+            return;
+        }
+
+        // 全てのアイテム需要が満たされた (もしくは saddle 枯渇) → 出品 phase へ
+        log.Information("[Restocker] pre-staging complete, starting listings");
+        State = ExecutionState.PerformingAction;
+        Throttle();
+    }
+
+    /// <summary>キャラバッグ内の対象アイテムの合計数量。</summary>
+    private int TotalInCharBag(uint itemId, bool isHQ)
+    {
+        var im = InventoryManager.Instance();
+        if (im == null) return 0;
+        var total = 0;
+        foreach (var t in CharBagContainers)
+        {
+            var c = im->GetInventoryContainer(t);
+            if (c == null) continue;
+            for (var i = 0; i < c->Size; i++)
+            {
+                var item = c->GetInventorySlot(i);
+                if (item == null || item->ItemId != itemId) continue;
+                var hq = (item->Flags & InventoryItem.ItemFlags.HighQuality) != 0;
+                if (hq != isHQ) continue;
+                total += (int)item->Quantity;
+            }
+        }
+        return total;
+    }
+
+    /// <summary>該当アイテムを持つ saddle slot を 1 つ char bag の空き slot に丸ごと移動。</summary>
+    private bool StageOneSaddleSlot(uint itemId, bool isHQ)
+    {
+        var im = InventoryManager.Instance();
+        if (im == null) return false;
+
+        foreach (var st in SaddleContainers)
+        {
+            var sc = im->GetInventoryContainer(st);
+            if (sc == null) continue;
+            for (var si = 0; si < sc->Size; si++)
+            {
+                var sit = sc->GetInventorySlot(si);
+                if (sit == null || sit->ItemId != itemId) continue;
+                var hq = (sit->Flags & InventoryItem.ItemFlags.HighQuality) != 0;
+                if (hq != isHQ) continue;
+                if (sit->Quantity == 0) continue;
+
+                foreach (var bt in CharBagContainers)
+                {
+                    var bc = im->GetInventoryContainer(bt);
+                    if (bc == null) continue;
+                    for (var bi = 0; bi < bc->Size; bi++)
+                    {
+                        var bit = bc->GetInventorySlot(bi);
+                        if (bit != null && bit->ItemId == 0)
+                        {
+                            var ret = im->MoveItemSlot(st, (ushort)si, bt, (ushort)bi, false);
+                            log.Information($"[Restocker] pre-stage {st}#{si}({sit->Quantity}) → {bt}#{bi} ret={ret}");
+                            return true;
+                        }
+                    }
+                }
+                log.Warning("[Restocker] pre-stage: no free char bag slot");
+                return false;
+            }
+        }
+        return false;
     }
 
     private void TickReadingPrices()
@@ -461,23 +581,9 @@ public sealed unsafe class Executor : IDisposable
                         return;
                     }
 
-                    // saddle ソース: MoveToRetainerMarket は saddle 直接読みできないので
-                    // char bag に staging してから出品する
-                    if (action.SourceKey.EndsWith(".saddle") &&
-                        !HasItemInCharBag(action.ItemId, action.IsHQ, action.Quantity))
-                    {
-                        if (!TryStageSaddleToCharBag(action))
-                        {
-                            log.Warning($"[Restocker] saddle staging failed for item={action.ItemId} hq={action.IsHQ}");
-                            currentJobActions.Dequeue();
-                            Throttle();
-                            return;
-                        }
-                        State = ExecutionState.AwaitingSaddleMove;
-                        Throttle();
-                        return;
-                    }
-
+                    // saddle source は AwaitingSellList → PreStagingSaddle で
+                    // 必要量を bag に運んでからこの phase に入っている前提なので、
+                    // 個別 staging はもう不要。bag に該当アイテムが無ければ skip。
                     if (!ExecuteDirectListing(action, suppressWarning: false, dstSlotOut: out var dstSlot))
                     {
                         log.Warning($"[Restocker] NewListing skip (direct listing failed): item={action.ItemId} hq={action.IsHQ}");

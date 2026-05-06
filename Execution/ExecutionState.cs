@@ -52,6 +52,9 @@ public enum ExecutionState
     /// <summary>サドルバッグ → キャラバッグへの staging が完了するのを待つ。</summary>
     AwaitingSaddleMove,
 
+    /// <summary>SellList を開いた直後、saddle source の必要量をまとめて bag に pre-staging する。</summary>
+    PreStagingSaddle,
+
     /// <summary>MoveToRetainerMarket 直後、対象 market slot に該当アイテムが server 反映されるのを待つ。</summary>
     AwaitingNewListing,
 
