@@ -115,11 +115,25 @@ public static class AddonText
         return false;
     }
 
-    private static readonly Lazy<string> LegacySellItemsRow = new(() => SafeRowText(5480));
-    private static readonly Lazy<string> LegacyQuitRow = new(() => SafeRowText(2383));
-    private static readonly Lazy<string> LegacyPutUpForSaleRow = new(() => SafeRowText(99));
+    // Lazy factory 全体を try でくるむ (Dalamud / Lumina 未ロードの単体テスト下でも
+    // 例外で死なないように)。ホスト下では try/catch のオーバーヘッドは無視できる。
+    private static readonly Lazy<string> LegacySellItemsRow = new(() => TryRow(5480));
+    private static readonly Lazy<string> LegacyQuitRow = new(() => TryRow(2383));
+    private static readonly Lazy<string> LegacyPutUpForSaleRow = new(() => TryRow(99));
+
+    private static string TryRow(uint rowId)
+    {
+        try { return SafeRowText(rowId); } catch { return string.Empty; }
+    }
 
     private static string SafeRowText(uint rowId)
+    {
+        // ホスト未初期化 (= 単体テスト) のときは Lumina への参照を JIT させずに早抜け。
+        if (Plugin.DataManager is null) return string.Empty;
+        try { return SafeRowTextCore(rowId); } catch { return string.Empty; }
+    }
+
+    private static string SafeRowTextCore(uint rowId)
     {
         try
         {

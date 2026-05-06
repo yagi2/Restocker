@@ -5,11 +5,41 @@
     <Description>Bulk reprice and split-list retainer market listings.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <IsPackable>false</IsPackable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- SDK 15 defaults to bin/x64/Release/; pin the historical bin/Release/ layout
+         so Dev Plugin Locations and the GHA release workflow keep working. -->
+    <PlatformTarget>x64</PlatformTarget>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+    <OutputPath>bin\$(Configuration)\</OutputPath>
   </PropertyGroup>
   <ItemGroup>
-    <None Include="images\icon.png" Pack="true">
+    <Compile Remove="tests\**\*.cs" />
+    <None Remove="tests\**\*" />
+    <EmbeddedResource Remove="tests\**\*" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="images\icon.png" Pack="true" Condition="Exists('images\icon.png')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Link>images\icon.png</Link>
     </None>
   </ItemGroup>
+  <!-- DalamudPackager 15 (DefaultDalamudPackagerRelease target) stages files
+       into bin/Release/Restocker/, zips them into latest.zip, and cleans up
+       the loose copies - including Restocker.dll itself. That breaks Dalamud
+       Dev Plugin Locations, which expect a DLL on disk. Re-extract the zip
+       AFTER DalamudPackager runs so a loadable Restocker.dll lives beside
+       latest.zip in the staged folder. -->
+  <Target Name="ExtractStagedZipForDevPlugin"
+          AfterTargets="Build"
+          DependsOnTargets="DefaultDalamudPackagerDebug;DefaultDalamudPackagerRelease">
+    <PropertyGroup>
+      <_StagedZip>$(OutputPath)$(MSBuildProjectName)\latest.zip</_StagedZip>
+      <_StagedDir>$(OutputPath)$(MSBuildProjectName)\</_StagedDir>
+    </PropertyGroup>
+    <Unzip Condition="Exists('$(_StagedZip)')"
+           SourceFiles="$(_StagedZip)"
+           DestinationFolder="$(_StagedDir)"
+           OverwriteReadOnlyFiles="true" />
+  </Target>
 </Project>
