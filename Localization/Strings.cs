@@ -151,6 +151,13 @@ public static class Strings
     public static string ColPrice => T("Price", "提示価格", "Preis", "Prix", "价格", "가격");
     public static string ColPlan => T("Plan", "計画", "Plan", "Plan", "计划", "계획");
     public static string ColLotsConfig => T("Qty x Slots", "個数×枠数", "Anz x Plätze", "Qté x Lots", "数量×槽位", "수량×슬롯");
+    public static string ColTarget => T("Target", "出品先", "Ziel", "Cible", "目标", "대상");
+    public static string AddToPlan => T("+ Add", "+ 追加", "+ Hinzu", "+ Ajouter", "+ 添加", "+ 추가");
+    public static string TargetSelf => T("(self)", "(自身)", "(selbst)", "(soi)", "(本人)", "(자신)");
+    public static string PendingPlansHeader => T("Planned listings: {0}", "出品プラン: {0} 件", "Geplante Posten: {0}", "Mises planifiées : {0}", "已计划 {0} 项", "계획 {0}건");
+    public static string PendingPlansEmpty => T("No plans yet. Set price/qty/slots/target on a row, then click +Add.", "プランが空です。各行で価格・個数・枠数・出品先を指定し +追加 を押してください。", "Noch keine Pläne. Pro Zeile Preis/Anz/Plätze/Ziel setzen, dann +Hinzu.", "Aucune mise. Renseignez prix/qté/lots/cible puis cliquez +Ajouter.", "暂无计划。在行内设定价格/数量/槽位/目标后点击 +添加。", "계획 없음. 행에 가격/수량/슬롯/대상을 설정한 뒤 +추가.");
+    public static string PendingPlanRemove => T("x", "削除", "x", "x", "删除", "삭제");
+    public static string ClearAllPlans => T("Clear all", "全消去", "Alle löschen", "Tout effacer", "全部清除", "모두 지움");
     public static string ListableOnly => T("Listable only", "出品可能アイテムのみ", "Nur einstellbare", "Vendables uniquement", "仅可上架", "등록 가능만");
     public static string Unsellable => T(" (not listable)", "（出品不可）", " (nicht einstellbar)", " (non vendable)", "（不可上架）", "（등록 불가）");
     public static string PlanCount => T("{0} listings", "{0}件", "{0} Posten", "{0} mises", "{0} 项", "{0}건");

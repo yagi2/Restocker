@@ -1,21 +1,18 @@
 using System.Collections.Generic;
 using System.Linq;
 using Dalamud.Bindings.ImGui;
-using FFXIVClientStructs.FFXIV.Client.Game;
-using FFXIVClientStructs.FFXIV.Client.UI;
 using Lumina.Excel.Sheets;
 using Restocker.Data;
 using Restocker.Execution;
 using Restocker.Localization;
-using Restocker.Market;
 using Restocker.Plan;
 
 namespace Restocker.Windows;
 
 /// <summary>
-/// 新規分割出品画面。**リテイナー毎の collapsing header** が top-level、
-/// 加えてキャラ所持品とサドルバッグも同じ形でセクション化される。
-/// 各セクション内のテーブルで価格を入れると、その場で Planner プレビュー。
+/// 新規分割出品画面。各行で「価格・個数・枠数・出品先」を指定して
+/// 「+追加」ボタンを押すとプランリストに積まれる。最後に「適用」で
+/// プランリストを一括実行。プランは下部のテーブルから個別削除可。
 /// </summary>
 public sealed class ListTab
 {
@@ -24,16 +21,17 @@ public sealed class ListTab
     private readonly ConfirmDialog confirmDialog;
     private string filter = string.Empty;
     private bool listableOnly = true;
-    /// <summary>編集中の価格。キーは "{sourceKey}#{itemId}.{hq}"。</summary>
+
+    /// <summary>編集中の値。キーは "{sourceKey}#{itemId}.{hq}"。</summary>
     private readonly Dictionary<string, long> editedPrice = new();
-    /// <summary>1 出品あたりの個数。0/未設定なら MaxStackPerListing。</summary>
     private readonly Dictionary<string, int> editedQtyPer = new();
-    /// <summary>出品枠数。0/未設定なら「保有量を埋め切るまで」。</summary>
     private readonly Dictionary<string, int> editedSlots = new();
-    /// <summary>キャラ所持品セクションごとの「出品先リテイナー key」選択。キーは char source key。</summary>
-    private readonly Dictionary<string, string> charTargetRetainer = new();
-    /// <summary>明示的に展開したセクションの id。デフォルトは折りたたみ。</summary>
+    /// <summary>行毎に target retainer。retainer source は自身固定なので未使用。</summary>
+    private readonly Dictionary<string, string> editedTarget = new();
     private readonly HashSet<string> expandedSections = new();
+
+    /// <summary>プランリスト。+追加で積まれ、適用で一括実行 → クリア。</summary>
+    private readonly List<PendingPlan> pendingPlans = new();
 
     public ListTab(Configuration configuration, Executor executor, ConfirmDialog confirmDialog)
     {
@@ -47,6 +45,8 @@ public sealed class ListTab
         DrawToolbar();
         ImGui.Separator();
         DrawSections();
+        ImGui.Separator();
+        DrawPendingPlans();
     }
 
     private void DrawToolbar()
@@ -72,24 +72,24 @@ public sealed class ListTab
                 expandedSections.Add("saddle-" + k);
             }
         }
-        // 適用ボタン
         ImGui.SameLine();
         DrawApplyButton();
     }
 
-
     private void DrawApplyButton()
     {
-        // ListTab の適用は各リテイナーセクションで価格入力された行に対し Planner.PlanNewListings で展開
-        var actions = BuildPlannedActions();
-        var disabled = actions.Count == 0 || executor.IsRunning;
+        var totalActions = pendingPlans.Sum(p => ExpandPlanToActions(p).Count);
+        var disabled = totalActions == 0 || executor.IsRunning;
         if (disabled) ImGui.BeginDisabled();
-        if (ImGui.Button(string.Format(Strings.ApplyWithCount, Strings.Apply, actions.Count)))
+        if (ImGui.Button(string.Format(Strings.ApplyWithCount, Strings.Apply, totalActions)))
         {
-            // Apply 直前にキャラ snapshot を取り直して plan の食い違いを防ぐ
             Plugin.Instance?.RetainerWatcher.CaptureCharacterSnapshot();
-            var freshActions = BuildPlannedActions();
-            confirmDialog.Request(freshActions, executor.StartApplyActions);
+            var actions = pendingPlans.SelectMany(ExpandPlanToActions).ToList();
+            confirmDialog.Request(actions, list =>
+            {
+                executor.StartApplyActions(list);
+                pendingPlans.Clear();
+            });
         }
         if (disabled) ImGui.EndDisabled();
 
@@ -102,57 +102,37 @@ public sealed class ListTab
         }
     }
 
-    private List<PlannedAction> BuildPlannedActions()
+    /// <summary>1 つの PendingPlan を実行可能な PlannedAction list に展開。</summary>
+    private List<PlannedAction> ExpandPlanToActions(PendingPlan p)
     {
-        var result = new List<PlannedAction>();
-        // 1) リテイナー所持品 → そのリテイナーで出品（既存）
-        foreach (var snap in configuration.Snapshots.Values)
+        if (!configuration.Snapshots.TryGetValue(p.TargetKey, out var target)) return new List<PlannedAction>();
+
+        // SourceKey が retainer key の場合は PlanNewListings、char.* なら PlanFromInventoryList
+        if (p.SourceKey == p.TargetKey && configuration.Snapshots.TryGetValue(p.SourceKey, out var srcSnap))
         {
-            foreach (var entry in DistinctItems(snap.Inventory))
-            {
-                var key = MakePriceKey(snap.Key, entry.ItemId, entry.IsHQ);
-                if (!editedPrice.TryGetValue(key, out var price) || price <= 0) continue;
-                var (qtyPer, slots) = ResolveLots(key);
-                result.AddRange(Planner.PlanNewListings(
-                    new[] { snap }, entry.ItemId, entry.IsHQ, price, entry.MaxStackPerListing,
-                    listingsCap: slots, perListingQty: qtyPer));
-            }
+            return Planner.PlanNewListings(
+                new[] { srcSnap }, p.ItemId, p.IsHQ, p.UnitPrice, p.MaxStack,
+                listingsCap: p.Slots, perListingQty: p.QtyPer);
         }
-        // 2) キャラバッグ・サドル → 選択された target リテイナーで「預け入れなし」直接出品
-        //    InventoryManager.MoveToRetainerMarket を使うのでサドルも同じ経路。
+        var inv = ResolveCharSourceInventory(p.SourceKey);
+        if (inv == null) return new List<PlannedAction>();
+        return Planner.PlanFromInventoryList(
+            inv, p.SourceKey, target, p.ItemId, p.IsHQ, p.UnitPrice, p.MaxStack,
+            listingsCap: p.Slots, perListingQty: p.QtyPer);
+    }
+
+    private List<InventoryEntry>? ResolveCharSourceInventory(string sourceKey)
+    {
+        // sourceKey: "char.{contentId:X}.bag" or "char.{contentId:X}.saddle"
         foreach (var ch in configuration.Characters.Values)
         {
-            var charKey = CharacterSnapshot.MakeKey(ch.CharacterContentId);
-            // bag
-            AddCharSourceActions(result, ch.Bag, charKey + ".bag");
-            // saddle (free + premium 両方を 1 セットで扱う)
-            AddCharSourceActions(result, ch.Saddlebag.Concat(ch.PremiumSaddlebag).ToList(), charKey + ".saddle");
+            var prefix = CharacterSnapshot.MakeKey(ch.CharacterContentId);
+            if (sourceKey == prefix + ".bag") return ch.Bag;
+            if (sourceKey == prefix + ".saddle") return ch.Saddlebag.Concat(ch.PremiumSaddlebag).ToList();
         }
-        return result;
+        return null;
     }
 
-    private void AddCharSourceActions(List<PlannedAction> result, List<Restocker.Data.InventoryEntry> inventory, string sourceKey)
-    {
-        if (!charTargetRetainer.TryGetValue(sourceKey, out var targetKey)) return;
-        if (string.IsNullOrEmpty(targetKey) || !configuration.Snapshots.TryGetValue(targetKey, out var target)) return;
-
-        foreach (var entry in DistinctItems(inventory))
-        {
-            var pkey = MakePriceKey(sourceKey, entry.ItemId, entry.IsHQ);
-            if (!editedPrice.TryGetValue(pkey, out var price) || price <= 0) continue;
-            var (qtyPer, slots) = ResolveLots(pkey);
-            result.AddRange(Planner.PlanFromInventoryList(
-                inventory, sourceKey, target, entry.ItemId, entry.IsHQ, price, entry.MaxStackPerListing,
-                listingsCap: slots, perListingQty: qtyPer));
-        }
-    }
-
-    /// <summary>
-    /// edited dictionaries から (qtyPer, slots) を取り出す。
-    /// dictionary に key 無し = ユーザがその行をまだ表示/操作していない → null (Planner default = 全枠埋め)。
-    /// dictionary に key あり = 描画されたので 0 でも 0 件意図として扱う。
-    /// 0 の Planner 側での扱いは <see cref="Planner.PlanNewListings"/> 参照。
-    /// </summary>
     private (int? qtyPer, int? slots) ResolveLots(string priceKey)
     {
         int? qtyPer = editedQtyPer.TryGetValue(priceKey, out var q) ? q : (int?)null;
@@ -160,15 +140,21 @@ public sealed class ListTab
         return (qtyPer, slots);
     }
 
-    /// <summary>sourceKey が示すリテイナー (retainer source ならそれ自身、char source なら target) の空き出品枠。</summary>
-    private int ResolveFreeListingSlots(string sourceKey)
+    /// <summary>retainer source なら自身、char source なら editedTarget の値。target retainer の空き枠数。</summary>
+    private int ResolveFreeListingSlots(string sourceKey, string priceKey)
     {
-        if (configuration.Snapshots.TryGetValue(sourceKey, out var snap))
+        var targetKey = ResolveTargetKey(sourceKey, priceKey);
+        if (string.IsNullOrEmpty(targetKey)) return 0;
+        if (configuration.Snapshots.TryGetValue(targetKey, out var snap))
             return System.Math.Max(0, Planner.MaxListingSlots - snap.Listings.Count);
-        if (charTargetRetainer.TryGetValue(sourceKey, out var targetKey)
-            && configuration.Snapshots.TryGetValue(targetKey, out var targetSnap))
-            return System.Math.Max(0, Planner.MaxListingSlots - targetSnap.Listings.Count);
         return 0;
+    }
+
+    /// <summary>retainer source 行は sourceKey 自身、char source 行は editedTarget[priceKey]。</summary>
+    private string ResolveTargetKey(string sourceKey, string priceKey)
+    {
+        if (configuration.Snapshots.ContainsKey(sourceKey)) return sourceKey;
+        return editedTarget.TryGetValue(priceKey, out var t) ? t : string.Empty;
     }
 
     private static IEnumerable<InventoryEntry> DistinctItems(IEnumerable<InventoryEntry> entries)
@@ -191,22 +177,21 @@ public sealed class ListTab
             return;
         }
 
-        var size = ImGui.GetContentRegionAvail();
-        if (!ImGui.BeginChild("##list-scroll", size, false, ImGuiWindowFlags.HorizontalScrollbar))
+        // 上部: アイテム一覧 (高さの 60%)
+        var avail = ImGui.GetContentRegionAvail();
+        var topHeight = System.Math.Max(120f, avail.Y * 0.6f);
+        if (!ImGui.BeginChild("##list-scroll", new System.Numerics.Vector2(avail.X, topHeight), false, ImGuiWindowFlags.HorizontalScrollbar))
         {
             ImGui.EndChild();
             return;
         }
 
-        // リテイナー側
         var snapshots = configuration.Snapshots.Values
             .OrderBy(s => s.CharacterName).ThenBy(s => s.RetainerName).ToList();
         foreach (var snap in snapshots)
         {
             DrawRetainerSection(snap);
         }
-
-        // キャラ側
         foreach (var ch in configuration.Characters.Values.OrderBy(c => c.CharacterName))
         {
             DrawCharacterSection(ch);
@@ -215,7 +200,6 @@ public sealed class ListTab
         ImGui.EndChild();
     }
 
-    /// <summary>デフォルト = 折りたたみ。ユーザー操作のみ <see cref="expandedSections"/> に反映。</summary>
     private bool DrawCollapsingHeader(string id, string label)
     {
         var open = expandedSections.Contains(id);
@@ -238,14 +222,13 @@ public sealed class ListTab
         var header = string.Format(Strings.RetainerHeaderInventory, snap.RetainerName, filtered.Count, FreshnessSuffix(snap.LastRefreshedUtc));
         if (!DrawCollapsingHeader("list-" + snap.Key, header)) return;
 
-        DrawRowsTable(snap.Key, filtered, sourceLabel: null, isRetainerSource: true);
+        DrawRowsTable(snap.Key, filtered, isRetainerSource: true);
     }
 
     private void DrawCharacterSection(CharacterSnapshot ch)
     {
         var sourceKey = CharacterSnapshot.MakeKey(ch.CharacterContentId);
 
-        // バッグ — target リテイナーを指定して「預け入れなし」で直接出品可
         var bagRows = AggregatePerSource(ch.Bag, listingSource: null);
         var bagFiltered = ApplyFilter(bagRows);
         if (bagFiltered.Count > 0 || filter.Length == 0)
@@ -253,12 +236,10 @@ public sealed class ListTab
             var header = string.Format(Strings.RetainerHeaderInventory, $"{Strings.CharacterInventoryHeader} ({ch.CharacterName})", bagFiltered.Count, FreshnessSuffix(ch.LastRefreshedUtc));
             if (DrawCollapsingHeader("char-" + sourceKey, header))
             {
-                DrawCharBagTargetCombo(sourceKey + ".bag");
-                DrawRowsTable(sourceKey + ".bag", bagFiltered, Strings.CharacterInventoryHeader, isRetainerSource: false);
+                DrawRowsTable(sourceKey + ".bag", bagFiltered, isRetainerSource: false);
             }
         }
 
-        // サドル系も MoveToRetainerMarket 経由で直接出品可能
         var saddleRows = AggregatePerSource(ch.Saddlebag.Concat(ch.PremiumSaddlebag).ToList(), listingSource: null);
         var saddleFiltered = ApplyFilter(saddleRows);
         if (saddleFiltered.Count > 0 || filter.Length == 0)
@@ -266,38 +247,8 @@ public sealed class ListTab
             var header = string.Format(Strings.RetainerHeaderInventory, $"{Strings.SaddlebagHeader} ({ch.CharacterName})", saddleFiltered.Count, FreshnessSuffix(ch.LastRefreshedUtc));
             if (DrawCollapsingHeader("saddle-" + sourceKey, header))
             {
-                DrawCharBagTargetCombo(sourceKey + ".saddle");
-                DrawRowsTable(sourceKey + ".saddle", saddleFiltered, Strings.SaddlebagHeader, isRetainerSource: false);
+                DrawRowsTable(sourceKey + ".saddle", saddleFiltered, isRetainerSource: false);
             }
-        }
-    }
-
-    private void DrawCharBagTargetCombo(string sourceKey)
-    {
-        var retainers = configuration.Snapshots.Values
-            .OrderBy(s => s.RetainerName).ToList();
-        if (retainers.Count == 0)
-        {
-            ImGui.TextDisabled(Strings.CharBagNeedRetainerSnapshot);
-            return;
-        }
-
-        var current = charTargetRetainer.GetValueOrDefault(sourceKey, string.Empty);
-        var labels = new List<string> { Strings.CharBagPickTarget };
-        var keys = new List<string> { string.Empty };
-        foreach (var r in retainers)
-        {
-            var freeSlots = Plan.Planner.MaxListingSlots - r.Listings.Count;
-            labels.Add($"{r.RetainerName}  ({freeSlots} {Strings.FreeSlots})");
-            keys.Add(r.Key);
-        }
-        var idx = keys.IndexOf(current);
-        if (idx < 0) idx = 0;
-
-        ImGui.SetNextItemWidth(280);
-        if (ImGui.Combo($"{Strings.CharBagTargetLabel}##target-{sourceKey}", ref idx, labels.ToArray(), labels.Count))
-        {
-            charTargetRetainer[sourceKey] = keys[idx];
         }
     }
 
@@ -309,7 +260,7 @@ public sealed class ListTab
         public required int Qty;
         public required int MaxStack;
         public required bool IsListable;
-        public required int CurrentlyListedQty; // リテイナーソースでのみ意味あり
+        public required int CurrentlyListedQty;
     }
 
     private List<Row> AggregatePerSource(List<InventoryEntry> inventory, List<ListingEntry>? listingSource)
@@ -368,25 +319,25 @@ public sealed class ListTab
         return $"{(int)age.TotalDays}d";
     }
 
-    private void DrawRowsTable(string sourceKey, List<Row> rows, string? sourceLabel, bool isRetainerSource)
+    private void DrawRowsTable(string sourceKey, List<Row> rows, bool isRetainerSource)
     {
         const ImGuiTableFlags flags =
             ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp |
             ImGuiTableFlags.NoSavedSettings;
 
-        // retainer source: Item, Owned, Listed, MaxStack, Price, LotsConfig, Plan = 7
-        // char source: Item, Owned, MaxStack, Price, LotsConfig = 5
-        if (!ImGui.BeginTable($"##list-table-{sourceKey}", isRetainerSource ? 7 : 5, flags)) return;
+        // Item, Owned, (Listed), MaxStack, Price, LotsConfig, Target, AddBtn = 7 or 8
+        var cols = isRetainerSource ? 8 : 7;
+        if (!ImGui.BeginTable($"##list-table-{sourceKey}", cols, flags)) return;
 
-        ImGui.TableSetupColumn(Strings.ColItem, ImGuiTableColumnFlags.WidthStretch, 0.4f);
-        ImGui.TableSetupColumn(Strings.ColOwned, ImGuiTableColumnFlags.WidthFixed, 70);
+        ImGui.TableSetupColumn(Strings.ColItem, ImGuiTableColumnFlags.WidthStretch, 0.35f);
+        ImGui.TableSetupColumn(Strings.ColOwned, ImGuiTableColumnFlags.WidthFixed, 60);
         if (isRetainerSource)
-            ImGui.TableSetupColumn(Strings.ColListed, ImGuiTableColumnFlags.WidthFixed, 70);
-        ImGui.TableSetupColumn(Strings.ColMaxStack, ImGuiTableColumnFlags.WidthFixed, 80);
-        ImGui.TableSetupColumn(Strings.ColPrice, ImGuiTableColumnFlags.WidthStretch, 0.3f);
+            ImGui.TableSetupColumn(Strings.ColListed, ImGuiTableColumnFlags.WidthFixed, 60);
+        ImGui.TableSetupColumn(Strings.ColMaxStack, ImGuiTableColumnFlags.WidthFixed, 70);
+        ImGui.TableSetupColumn(Strings.ColPrice, ImGuiTableColumnFlags.WidthStretch, 0.2f);
         ImGui.TableSetupColumn(Strings.ColLotsConfig, ImGuiTableColumnFlags.WidthFixed, 140);
-        if (isRetainerSource)
-            ImGui.TableSetupColumn(Strings.ColPlan, ImGuiTableColumnFlags.WidthStretch, 0.25f);
+        ImGui.TableSetupColumn(Strings.ColTarget, ImGuiTableColumnFlags.WidthStretch, 0.25f);
+        ImGui.TableSetupColumn("##add", ImGuiTableColumnFlags.WidthFixed, 70);
         ImGui.TableHeadersRow();
 
         foreach (var r in rows)
@@ -414,22 +365,28 @@ public sealed class ListTab
             ImGui.TableNextColumn();
             DrawLotsCell(sourceKey, r);
 
-            if (isRetainerSource)
-            {
-                ImGui.TableNextColumn();
-                DrawPlanCell(sourceKey, r);
-            }
+            ImGui.TableNextColumn();
+            DrawTargetCell(sourceKey, r, isRetainerSource);
+
+            ImGui.TableNextColumn();
+            DrawAddButton(sourceKey, r, isRetainerSource);
         }
 
         ImGui.EndTable();
     }
 
-    /// <summary>
-    /// 個数 × 枠数 + MAX ボタン。
-    /// 行を一度描画したら editedQtyPer / editedSlots に key を作り (0 で初期化)、
-    /// 「画面に表示されている 0×0 = 出品しない」「未表示 = Planner デフォルト」を区別する。
-    /// MAX ボタンは min(MaxStack, 所持数) と必要枠数 (空き枠で頭打ち) を入れる。
-    /// </summary>
+    private void DrawPriceCell(string sourceKey, Row r)
+    {
+        var key = MakePriceKey(sourceKey, r.ItemId, r.IsHQ);
+        var v = (int)editedPrice.GetValueOrDefault(key, 0);
+        ImGui.SetNextItemWidth(-1);
+        if (ImGui.InputInt($"##price-{key}", ref v, 0))
+        {
+            if (v < 0) v = 0;
+            editedPrice[key] = v;
+        }
+    }
+
     private void DrawLotsCell(string sourceKey, Row r)
     {
         var key = MakePriceKey(sourceKey, r.ItemId, r.IsHQ);
@@ -464,7 +421,7 @@ public sealed class ListTab
         {
             var qPer = System.Math.Min(r.MaxStack, r.Qty);
             if (qPer < 1) qPer = r.MaxStack;
-            var freeSlots = ResolveFreeListingSlots(sourceKey);
+            var freeSlots = ResolveFreeListingSlots(sourceKey, key);
             var neededSlots = qPer > 0 ? (r.Qty + qPer - 1) / qPer : 0;
             var targetSlots = System.Math.Min(freeSlots, neededSlots);
             if (targetSlots < 0) targetSlots = 0;
@@ -474,52 +431,156 @@ public sealed class ListTab
         if (maxDisabled) ImGui.EndDisabled();
     }
 
-    private void DrawPriceInput(string key)
+    /// <summary>retainer source は「(自身)」表示、char source は target retainer の Combo。</summary>
+    private void DrawTargetCell(string sourceKey, Row r, bool isRetainerSource)
     {
-        var v = (int)editedPrice.GetValueOrDefault(key, 0);
-        ImGui.SetNextItemWidth(-1);
-        if (ImGui.InputInt($"##price-{key}", ref v, 0))
+        if (isRetainerSource)
         {
-            if (v < 0) v = 0;
-            editedPrice[key] = v;
+            if (configuration.Snapshots.TryGetValue(sourceKey, out var self))
+                ImGui.TextDisabled(self.RetainerName + " " + Strings.TargetSelf);
+            else
+                ImGui.TextDisabled(Strings.TargetSelf);
+            return;
         }
-    }
 
-    /// <summary>価格セル: 入力欄のみ。新規出品では fetch 経路が無い (RetainerSell ダイアログを
-    /// 未出品アイテム用に開く API が現環境で動かない) ので、最安/-1g は価格更新タブ専用にした。</summary>
-    private void DrawPriceCell(string sourceKey, Row r)
-    {
         var key = MakePriceKey(sourceKey, r.ItemId, r.IsHQ);
-        var v = (int)editedPrice.GetValueOrDefault(key, 0);
-        ImGui.SetNextItemWidth(-1);
-        if (ImGui.InputInt($"##price-{key}", ref v, 0))
+        var retainers = configuration.Snapshots.Values.OrderBy(s => s.RetainerName).ToList();
+        if (retainers.Count == 0)
         {
-            if (v < 0) v = 0;
-            editedPrice[key] = v;
+            ImGui.TextDisabled(Strings.CharBagNeedRetainerSnapshot);
+            return;
+        }
+
+        var current = editedTarget.GetValueOrDefault(key, string.Empty);
+        var labels = new List<string> { Strings.CharBagPickTarget };
+        var keys = new List<string> { string.Empty };
+        foreach (var ret in retainers)
+        {
+            var freeSlots = Planner.MaxListingSlots - ret.Listings.Count;
+            labels.Add($"{ret.RetainerName} ({freeSlots} {Strings.FreeSlots})");
+            keys.Add(ret.Key);
+        }
+        var idx = keys.IndexOf(current);
+        if (idx < 0) idx = 0;
+        ImGui.SetNextItemWidth(-1);
+        if (ImGui.Combo($"##target-{key}", ref idx, labels.ToArray(), labels.Count))
+        {
+            editedTarget[key] = keys[idx];
         }
     }
 
-    private void DrawPlanCell(string sourceKey, Row r)
+    private void DrawAddButton(string sourceKey, Row r, bool isRetainerSource)
     {
         var key = MakePriceKey(sourceKey, r.ItemId, r.IsHQ);
         var price = editedPrice.GetValueOrDefault(key, 0);
-        if (price <= 0) { ImGui.TextDisabled("—"); return; }
-        if (!r.IsListable) { ImGui.TextDisabled(Strings.Unsellable); return; }
+        var qtyPer = editedQtyPer.GetValueOrDefault(key, 0);
+        var slots = editedSlots.GetValueOrDefault(key, 0);
+        var targetKey = ResolveTargetKey(sourceKey, key);
 
-        if (!configuration.Snapshots.TryGetValue(sourceKey, out var snap)) { ImGui.TextDisabled("—"); return; }
-        var (qtyPer, slots) = ResolveLots(key);
-        var plan = Planner.PlanNewListings(new[] { snap }, r.ItemId, r.IsHQ, price, r.MaxStack,
-            listingsCap: slots, perListingQty: qtyPer);
-        var overflow = Planner.Overflow(new[] { snap }, plan, r.ItemId, r.IsHQ);
-        var summary = string.Format(Strings.PlanCount, plan.Count);
-        if (overflow > 0)
+        var canAdd = r.IsListable
+                     && price > 0
+                     && qtyPer > 0
+                     && slots > 0
+                     && !string.IsNullOrEmpty(targetKey)
+                     && configuration.Snapshots.ContainsKey(targetKey);
+
+        if (!canAdd) ImGui.BeginDisabled();
+        if (ImGui.SmallButton($"{Strings.AddToPlan}##add-{key}"))
         {
-            ImGui.TextColored(new System.Numerics.Vector4(1f, 0.55f, 0.2f, 1f),
-                summary + " " + string.Format(Strings.PlanOverflow, overflow));
+            AddPlan(sourceKey, r, price, qtyPer, slots, targetKey, isRetainerSource);
         }
-        else
-        {
-            ImGui.TextUnformatted(summary);
-        }
+        if (!canAdd) ImGui.EndDisabled();
     }
+
+    private void AddPlan(string sourceKey, Row r, long price, int qtyPer, int slots, string targetKey, bool isRetainerSource)
+    {
+        if (!configuration.Snapshots.TryGetValue(targetKey, out var target)) return;
+
+        var sourceLabel = isRetainerSource
+            ? target.RetainerName
+            : (sourceKey.EndsWith(".saddle") ? Strings.SaddlebagHeader : Strings.CharacterInventoryHeader);
+
+        pendingPlans.Add(new PendingPlan
+        {
+            ItemId = r.ItemId,
+            IsHQ = r.IsHQ,
+            ItemName = r.ItemName,
+            SourceKey = sourceKey,
+            SourceLabel = sourceLabel,
+            TargetKey = targetKey,
+            TargetName = target.RetainerName,
+            QtyPer = qtyPer,
+            Slots = slots,
+            UnitPrice = price,
+            MaxStack = r.MaxStack,
+        });
+    }
+
+    private void DrawPendingPlans()
+    {
+        ImGui.TextUnformatted(string.Format(Strings.PendingPlansHeader, pendingPlans.Count));
+        ImGui.SameLine();
+        if (pendingPlans.Count > 0 && ImGui.SmallButton(Strings.ClearAllPlans + "##clear-plans"))
+        {
+            pendingPlans.Clear();
+        }
+
+        if (pendingPlans.Count == 0)
+        {
+            ImGui.TextDisabled(Strings.PendingPlansEmpty);
+            return;
+        }
+
+        const ImGuiTableFlags flags =
+            ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp |
+            ImGuiTableFlags.NoSavedSettings;
+        if (!ImGui.BeginTable("##pending-table", 6, flags)) return;
+        ImGui.TableSetupColumn(Strings.ColItem, ImGuiTableColumnFlags.WidthStretch, 0.35f);
+        ImGui.TableSetupColumn(Strings.ColLotsConfig, ImGuiTableColumnFlags.WidthFixed, 110);
+        ImGui.TableSetupColumn(Strings.ColPrice, ImGuiTableColumnFlags.WidthFixed, 100);
+        ImGui.TableSetupColumn(Strings.ColTarget, ImGuiTableColumnFlags.WidthStretch, 0.25f);
+        ImGui.TableSetupColumn("Source", ImGuiTableColumnFlags.WidthStretch, 0.25f);
+        ImGui.TableSetupColumn("##remove", ImGuiTableColumnFlags.WidthFixed, 50);
+        ImGui.TableHeadersRow();
+
+        // 削除はループ後に行う
+        var removeIdx = -1;
+        for (var i = 0; i < pendingPlans.Count; i++)
+        {
+            var p = pendingPlans[i];
+            ImGui.TableNextRow();
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(p.ItemName);
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted($"{p.QtyPer} x {p.Slots}");
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted($"{p.UnitPrice:N0} g");
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(p.TargetName);
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(p.SourceLabel);
+            ImGui.TableNextColumn();
+            if (ImGui.SmallButton($"{Strings.PendingPlanRemove}##rm-{i}")) removeIdx = i;
+        }
+        ImGui.EndTable();
+
+        if (removeIdx >= 0) pendingPlans.RemoveAt(removeIdx);
+    }
+}
+
+/// <summary>1 行ぶんの「+追加」アクションでプランリストに積む内部表現。
+/// ExpandPlanToActions で実行可能な PlannedAction list に展開する。</summary>
+public sealed class PendingPlan
+{
+    public uint ItemId;
+    public bool IsHQ;
+    public string ItemName = string.Empty;
+    public string SourceKey = string.Empty;
+    public string SourceLabel = string.Empty;
+    public string TargetKey = string.Empty;
+    public string TargetName = string.Empty;
+    public int QtyPer;
+    public int Slots;
+    public long UnitPrice;
+    public int MaxStack;
 }
