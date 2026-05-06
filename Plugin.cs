@@ -27,6 +27,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static INotificationManager NotificationManager { get; private set; } = null!;
     [PluginService] internal static IPlayerState PlayerState { get; private set; } = null!;
     [PluginService] internal static IObjectTable ObjectTable { get; private set; } = null!;
+    [PluginService] internal static IMarketBoard MarketBoard { get; private set; } = null!;
 
     private const string CommandName = "/restocker";
 
@@ -48,7 +49,7 @@ public sealed class Plugin : IDalamudPlugin
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         Strings.SetLanguage(Configuration.ResolveLanguage(ClientState.ClientLanguage));
 
-        MarketWatcher = new MarketWatcher(AddonLifecycle, Framework, Log);
+        MarketWatcher = new MarketWatcher(MarketBoard, Log);
         Executor = new Executor(Framework, Log, Configuration, MarketWatcher.Cache);
 
         MainWindow = new MainWindow(Configuration, Executor, MarketWatcher);
