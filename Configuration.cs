@@ -35,6 +35,9 @@ public sealed class Configuration : IPluginConfiguration
     /// </summary>
     public int Language { get; set; } = -1;
 
+    /// <summary>「最安値 -X ギル」ボタンで使う undercut 値 (gil)。デフォルト 1。</summary>
+    public int UndercutDelta { get; set; } = 1;
+
     public Language ResolveLanguage(Dalamud.Game.ClientLanguage clientLanguage)
     {
         if (Language >= 0 && Language <= 5)

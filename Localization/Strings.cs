@@ -98,6 +98,30 @@ public static class Strings
         "请先在市场上打开物品以填充缓存。",
         "먼저 마켓에서 아이템을 열어 캐시를 채워주세요.");
 
+    public static string SettingsUndercutDelta => T(
+        "Undercut delta (gil)",
+        "アンダーカット幅（ギル）",
+        "Unterbieten-Delta (Gil)",
+        "Décote (gil)",
+        "压价幅度（金币）",
+        "언더컷 폭(길)");
+
+    public static string RepriceMatchLowestForFormat => T(
+        "All items: lowest -{0}g",
+        "全てのアイテム: 最安値 -{0}ギル",
+        "Alle: Mindestpreis -{0} Gil",
+        "Tout : prix min -{0} gil",
+        "全部: 最低价 -{0}金币",
+        "전체: 최저가 -{0}길");
+
+    public static string RepriceMatchLowestExactThisRetainer => T(
+        "Match lowest (exact) for all items",
+        "全てのアイテムを最安値で価格更新",
+        "Mindestpreis (exakt) (nur dieser Gehilfe)",
+        "Prix minimum (exact, intendant uniquement)",
+        "全部以最低价更新（同价）",
+        "최저가 그대로 (이 리테이너)");
+
     public static string RepriceMatchLowestThisRetainer => T(
         "Match lowest -1g for all items",
         "全てのアイテムを最安値 -1ギルで価格更新",

@@ -142,15 +142,26 @@ public sealed class RepriceTab
             var header = string.Format(Strings.RetainerHeader, snap.RetainerName, filteredListings.Count, FreshnessSuffix(snap));
             if (!DrawCollapsingHeader("reprice-" + snap.Key, header)) continue;
 
-            // 自動 fetch + 最安値 -1ギル 適用。Dagobert の Callback シグネチャ
-            // (case=0, itemIndex=slot, 1) で listing slot click が確実に発火するように
-            // なったので、Restocker から各 listing → RetainerSell → ComparePrices →
-            // ItemSearchResult → MarketCache 更新を順に走らせる。完了後に
-            // ApplyMatchLowestForRetainer で editedPrice に -1ギル を反映。
-            if (ImGui.SmallButton(Strings.RepriceMatchLowestThisRetainer + "##matchlowest-" + snap.Key))
+            // 自動 fetch → 最安値ベースで editedPrice 適用。Listing 行 click を 3 引数
+            // callback で発火し、ContextMenu の「価格を変更する」→ RetainerSell →
+            // ComparePrices → ItemSearchResult → MarketCache 更新を 1 件ずつ巡回する。
+            // 完了後に offset を加味した値を editedPrice に書き込む。
+            var delta = configuration.UndercutDelta;
+            var undercutLabel = string.Format(Strings.RepriceMatchLowestForFormat, delta);
+            if (ImGui.SmallButton(undercutLabel + "##matchlowest-" + snap.Key))
             {
                 var capturedSnap = snap;
-                executor.OnFetchMarketCompleted = () => ApplyMatchLowestForRetainer(capturedSnap);
+                var capturedOffset = -delta;
+                executor.OnFetchMarketCompleted = () => ApplyMatchLowestForRetainer(capturedSnap, offset: capturedOffset);
+                executor.StartFetchMarketPricesForRetainer(snap.Key);
+            }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(Strings.RepriceMatchLowestTooltip);
+            ImGui.SameLine();
+            if (ImGui.SmallButton(Strings.RepriceMatchLowestExactThisRetainer + "##matchexact-" + snap.Key))
+            {
+                var capturedSnap = snap;
+                executor.OnFetchMarketCompleted = () => ApplyMatchLowestForRetainer(capturedSnap, offset: 0);
                 executor.StartFetchMarketPricesForRetainer(snap.Key);
             }
             if (ImGui.IsItemHovered())
@@ -205,14 +216,14 @@ public sealed class RepriceTab
     /// <summary>
     /// このリテイナーの listing にだけ MarketCache の最安値 -1ギルを適用。
     /// </summary>
-    private void ApplyMatchLowestForRetainer(RetainerSnapshot snap)
+    private void ApplyMatchLowestForRetainer(RetainerSnapshot snap, long offset = -1)
     {
         var seen = new HashSet<(uint, bool)>();
         var missing = new HashSet<(uint, bool, string)>();
         var applied = 0;
         var sheet = Plugin.DataManager.GetExcelSheet<Item>();
 
-        Plugin.Log.Information($"[Restocker] reprice apply: retainer={snap.RetainerName} listings={snap.Listings.Count}");
+        Plugin.Log.Information($"[Restocker] reprice apply: retainer={snap.RetainerName} listings={snap.Listings.Count} offset={offset}");
 
         foreach (var listing in snap.Listings)
         {
@@ -229,15 +240,16 @@ public sealed class RepriceTab
             }
             var lowest = marketCache.GetLowest(listing.ItemId, listing.IsHQ);
             var current = listing.UnitPrice;
-            if (lowest <= 1)
+            if (lowest <= 0)
             {
-                Plugin.Log.Information($"  slot={listing.ListingIndex} item={listing.ItemId} hq={listing.IsHQ} name='{name}' lowest={lowest} (skipped, too low)");
+                Plugin.Log.Information($"  slot={listing.ListingIndex} item={listing.ItemId} hq={listing.IsHQ} name='{name}' lowest={lowest} (skipped, no data)");
                 continue;
             }
-            var newPrice = lowest - 1;
+            var newPrice = lowest + offset;
+            if (newPrice < 1) newPrice = 1;
             editedPrice[$"{snap.Key}#{listing.ListingIndex}"] = newPrice;
             applied++;
-            Plugin.Log.Information($"  slot={listing.ListingIndex} item={listing.ItemId} hq={listing.IsHQ} name='{name}' current={current:N0} lowest={lowest:N0} -> new={newPrice:N0}");
+            Plugin.Log.Information($"  slot={listing.ListingIndex} item={listing.ItemId} hq={listing.IsHQ} name='{name}' current={current:N0} lowest={lowest:N0} offset={offset} -> new={newPrice:N0}");
         }
 
         if (missing.Count == 0)
