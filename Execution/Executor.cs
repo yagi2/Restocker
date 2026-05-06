@@ -1036,9 +1036,10 @@ public sealed unsafe class Executor : IDisposable
         var addon = AddonHelper.GetVisible("RetainerSell");
         if (addon == null) return;
 
+        var action = currentJobActions.Peek();
         // ComparePrices を click。AddonRetainerSell の event id 4 (Marketbuddy 慣例)
         Callback.Fire(addon, true, 4);
-        log.Debug("[Restocker] clicked ComparePrices");
+        log.Information($"[Restocker] clicked ComparePrices for item={action.ItemId} hq={action.IsHQ} (slot={action.ListingIndex})");
         State = ExecutionState.FetchAwaitingMarketData;
         waitingSince = DateTime.UtcNow;
         Throttle();
@@ -1051,8 +1052,8 @@ public sealed unsafe class Executor : IDisposable
         var timeout = waitingSince != null && DateTime.UtcNow - waitingSince.Value > TimeSpan.FromSeconds(6);
         if (!ready && !timeout) return;
 
-        if (!ready) log.Warning($"[Restocker] market fetch timeout for item={action.ItemId} hq={action.IsHQ}");
-        else log.Debug($"[Restocker] market data ready for item={action.ItemId} hq={action.IsHQ}");
+        if (!ready) log.Warning($"[Restocker] market fetch timeout for item={action.ItemId} hq={action.IsHQ} (ItemSearchResult open={AddonHelper.IsOpen("ItemSearchResult")})");
+        else log.Information($"[Restocker] market data ready for item={action.ItemId} hq={action.IsHQ}, lowest={marketCache!.GetLowest(action.ItemId, action.IsHQ)}");
 
         // ItemSearchResult を閉じる → RetainerSell に戻る
         var sr = AddonHelper.GetVisible("ItemSearchResult");
