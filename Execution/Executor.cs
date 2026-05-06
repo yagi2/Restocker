@@ -1101,10 +1101,31 @@ public sealed unsafe class Executor : IDisposable
 
     private void TickFetchAwaitingSellListAfter()
     {
-        if (AddonHelper.IsOpen("ItemSearchResult")) return;
-        if (AddonHelper.IsOpen("RetainerSell")) return;
+        // server が前リクエストの後続バッチを遅延配送してきて ItemSearchResult が
+        // 再 open するケースが起きる。ただ visible 待ちにすると永久に止まるので、
+        // 見えてたら Cancel を再送し、5 秒経っても閉じなければ強制続行する。
+        var sr = AddonHelper.GetVisible("ItemSearchResult");
+        var sell = AddonHelper.GetVisible("RetainerSell");
+        if (sr != null || sell != null)
+        {
+            if (waitingSince == null) waitingSince = DateTime.UtcNow;
+            var elapsed = DateTime.UtcNow - waitingSince.Value;
+            if (elapsed > TimeSpan.FromSeconds(5))
+            {
+                log.Warning($"[Restocker] post-fetch dialogs still open after 5s (ItemSearchResult={sr != null}, RetainerSell={sell != null}); forcing continue");
+                // fall through and advance the queue
+            }
+            else
+            {
+                if (sr != null) Callback.Fire(sr, true, -1);
+                if (sell != null) Callback.Fire(sell, true, -1);
+                return;
+            }
+        }
+
         if (!AddonHelper.IsOpen("RetainerSellList")) return;
 
+        waitingSince = null;
         currentJobActions.Dequeue();
         CompletedActions++;
         if (currentJobActions.Count == 0)
@@ -1114,9 +1135,7 @@ public sealed unsafe class Executor : IDisposable
         }
         State = ExecutionState.PerformingAction;
         // 次の listing click までの cooldown。server 側の前リクエストの応答遅延が
-        // 次の検索結果に紛れ込んで「OfferingsReceived for item=X ignored」が連発
-        // するのを抑える。短すぎると expected と違う応答が新しい listing 結果と誤認
-        // されるケースが残る。
+        // 次の検索結果に紛れ込むのを抑えるため。
         Wait(TimeSpan.FromMilliseconds(800));
     }
 
