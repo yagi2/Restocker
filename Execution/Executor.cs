@@ -433,32 +433,22 @@ public sealed unsafe class Executor : IDisposable
                     return;
                 }
             case PlannedActionKind.NewListing:
+                // 新規出品は **必ずダイアログ経由** にする。
+                // MoveToRetainerMarket 直叩きは server 側で実際にコミットされない
+                // ケース (特に saddle source) があるため、信頼性のため
+                // FFXIV ネイティブの flow (右クリック → 'マーケットに出品' → RetainerSell → Confirm)
+                // を踏む。
+                if (!OpenContextMenuForAnySlot(action.ItemId, action.IsHQ))
                 {
-                    var sourceKey = string.IsNullOrEmpty(action.SourceKey) ? action.RetainerKey : action.SourceKey;
-                    var isSaddle = sourceKey.EndsWith(".saddle");
-
-                    // 1) char bag / retainer bag を直接探す。saddle source の 1 回目は staging 前なので
-                    //    見つからなくても warning を抑止し、staging path に流す
-                    if (ExecuteDirectListing(action, suppressWarning: isSaddle))
-                    {
-                        CompletedActions++;
-                        currentJobActions.Dequeue();
-                        Throttle();
-                        return;
-                    }
-                    // 2) サドル source の場合は staging が要る
-                    if (isSaddle && TryStageSaddleToCharBag(action))
-                    {
-                        State = ExecutionState.AwaitingSaddleMove;
-                        Throttle();
-                        return;
-                    }
-                    // 3) どうしても無理 → skip
-                    log.Warning($"[Restocker] NewListing skip (no source slot): item={action.ItemId} src={action.SourceKey}");
+                    log.Warning($"[Restocker] NewListing skip (no source slot): item={action.ItemId} hq={action.IsHQ}");
                     currentJobActions.Dequeue();
                     Throttle();
                     return;
                 }
+                State = ExecutionState.AwaitingContextMenu;
+                waitingSince = null;
+                Throttle();
+                return;
         }
         Stop($"unknown action kind {action.Kind}");
     }
@@ -480,14 +470,14 @@ public sealed unsafe class Executor : IDisposable
         var sell = (AddonRetainerSell*)addon;
 
         var action = currentJobActions.Peek();
-        if (sell->AskingPrice != null)
+        // ECommons 流: AskingPrice 設定は Callback.Fire(addon, true, 2, value)
+        Callback.Fire(addon, true, 2, (int)Math.Min(action.UnitPrice, int.MaxValue));
+        if (action.Kind == PlannedActionKind.NewListing)
         {
-            sell->AskingPrice->SetValue((int)Math.Min(action.UnitPrice, int.MaxValue));
+            // Quantity は event 3 で設定
+            Callback.Fire(addon, true, 3, action.Quantity);
         }
-        if (action.Kind == PlannedActionKind.NewListing && sell->Quantity != null)
-        {
-            sell->Quantity->SetValue(action.Quantity);
-        }
+        log.Information($"[Restocker] RetainerSell set price={action.UnitPrice} qty={action.Quantity}");
         State = ExecutionState.ConfirmingSellDialog;
         Throttle();
     }
@@ -892,12 +882,21 @@ public sealed unsafe class Executor : IDisposable
         var addon = AddonHelper.GetVisible("RetainerSell");
         if (addon == null) { Stop("RetainerSell not visible at confirm"); return; }
         var sell = (AddonRetainerSell*)addon;
-        // Confirm ボタン click: AddonRetainerSell の confirm callback ID は 0
-        Callback.Fire(addon, true, 0);
-        log.Debug("[Restocker] confirmed RetainerSell dialog");
+        // Confirm ボタンを ECommons 流の ReceiveEvent で click (FireCallback だと
+        // server 側に届かないことがある)
+        var ok = ButtonClick.Click(sell->Confirm, addon);
+        if (!ok)
+        {
+            log.Warning("[Restocker] Confirm click failed");
+            Stop("Confirm click failed");
+            return;
+        }
+        log.Information("[Restocker] confirmed RetainerSell dialog");
 
-        currentJobActions.Dequeue();
+        var dequeued = currentJobActions.Dequeue();
         CompletedActions++;
+        // 新規出品の場合、市場スロットは server が次に空いてるところを使うはずなので
+        // 我々の usedMarketSlots 追跡は厳密には不要だが、Reprice 用に Reprice 経路は別
         State = ExecutionState.PerformingAction;
         Throttle();
     }

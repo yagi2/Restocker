@@ -20,14 +20,26 @@ public static unsafe class ContextMenuHelper
         {
             var idx = i + EntryNameOffset;
             if (idx >= totalValues) break;
-            var v = values[idx];
-            if (v.Type != AtkValueType.String) continue;
-            var s = v.String;
-            if (s.Value == null) continue;
-            var text = System.Runtime.InteropServices.Marshal.PtrToStringUTF8((nint)s.Value) ?? string.Empty;
-            if (predicate(text)) return i;
+            var text = ExtractText(values[idx]);
+            if (text != null && predicate(text)) return i;
         }
         return -1;
+    }
+
+    /// <summary>AtkValue から表示テキストを抽出。String / ManagedString / String8 等を吸収。</summary>
+    private static string? ExtractText(AtkValue v)
+    {
+        switch (v.Type)
+        {
+            case AtkValueType.String:
+            case AtkValueType.String8:
+            case AtkValueType.ManagedString:
+            case AtkValueType.Managed:
+                if (v.String.Value == null) return null;
+                return System.Runtime.InteropServices.Marshal.PtrToStringUTF8((nint)v.String.Value);
+            default:
+                return null;
+        }
     }
 
     public static bool ClickEntry(Predicate<string> predicate)
@@ -54,19 +66,8 @@ public static unsafe class ContextMenuHelper
         {
             var idx = i + EntryNameOffset;
             if (idx >= totalValues) break;
-            var v = values[idx];
-            if (v.Type != AtkValueType.String)
-            {
-                result.Add($"[type={v.Type}]");
-                continue;
-            }
-            var s = v.String;
-            if (s.Value == null)
-            {
-                result.Add("(null)");
-                continue;
-            }
-            result.Add(System.Runtime.InteropServices.Marshal.PtrToStringUTF8((nint)s.Value) ?? string.Empty);
+            var text = ExtractText(values[idx]);
+            result.Add(text ?? $"[type={values[idx].Type}]");
         }
         return result;
     }
