@@ -1,6 +1,8 @@
 using System.Collections.Generic;
 using System.Linq;
 using Dalamud.Bindings.ImGui;
+using FFXIVClientStructs.FFXIV.Client.Game;
+using FFXIVClientStructs.FFXIV.Client.UI;
 using Lumina.Excel.Sheets;
 using Restocker.Data;
 using Restocker.Execution;
@@ -219,14 +221,28 @@ public sealed class ListTab
         }
     }
 
-    /// <summary>edited dictionaries から (qtyPer, slots) を取り出す。0/未設定は null = Planner default。</summary>
+    /// <summary>
+    /// edited dictionaries から (qtyPer, slots) を取り出す。
+    /// dictionary に key 無し = ユーザがその行をまだ表示/操作していない → null (Planner default = 全枠埋め)。
+    /// dictionary に key あり = 描画されたので 0 でも 0 件意図として扱う。
+    /// 0 の Planner 側での扱いは <see cref="Planner.PlanNewListings"/> 参照。
+    /// </summary>
     private (int? qtyPer, int? slots) ResolveLots(string priceKey)
     {
-        int? qtyPer = null;
-        int? slots = null;
-        if (editedQtyPer.TryGetValue(priceKey, out var q) && q > 0) qtyPer = q;
-        if (editedSlots.TryGetValue(priceKey, out var s) && s > 0) slots = s;
+        int? qtyPer = editedQtyPer.TryGetValue(priceKey, out var q) ? q : (int?)null;
+        int? slots = editedSlots.TryGetValue(priceKey, out var s) ? s : (int?)null;
         return (qtyPer, slots);
+    }
+
+    /// <summary>sourceKey が示すリテイナー (retainer source ならそれ自身、char source なら target) の空き出品枠。</summary>
+    private int ResolveFreeListingSlots(string sourceKey)
+    {
+        if (configuration.Snapshots.TryGetValue(sourceKey, out var snap))
+            return System.Math.Max(0, Planner.MaxListingSlots - snap.Listings.Count);
+        if (charTargetRetainer.TryGetValue(sourceKey, out var targetKey)
+            && configuration.Snapshots.TryGetValue(targetKey, out var targetSnap))
+            return System.Math.Max(0, Planner.MaxListingSlots - targetSnap.Listings.Count);
+        return 0;
     }
 
     private static IEnumerable<InventoryEntry> DistinctItems(IEnumerable<InventoryEntry> entries)
@@ -482,12 +498,20 @@ public sealed class ListTab
         ImGui.EndTable();
     }
 
-    /// <summary>個数 × 枠数 のセル: 2 つの InputInt を横並び。0 = auto / 全枠埋め。</summary>
+    /// <summary>
+    /// 個数 × 枠数 + MAX ボタン。
+    /// 行を一度描画したら editedQtyPer / editedSlots に key を作り (0 で初期化)、
+    /// 「画面に表示されている 0×0 = 出品しない」「未表示 = Planner デフォルト」を区別する。
+    /// MAX ボタンは min(MaxStack, 所持数) と必要枠数 (空き枠で頭打ち) を入れる。
+    /// </summary>
     private void DrawLotsCell(string sourceKey, Row r)
     {
         var key = MakePriceKey(sourceKey, r.ItemId, r.IsHQ);
-        var qty = editedQtyPer.GetValueOrDefault(key, 0);
-        var slots = editedSlots.GetValueOrDefault(key, 0);
+        if (!editedQtyPer.ContainsKey(key)) editedQtyPer[key] = 0;
+        if (!editedSlots.ContainsKey(key)) editedSlots[key] = 0;
+
+        var qty = editedQtyPer[key];
+        var slots = editedSlots[key];
 
         ImGui.SetNextItemWidth(50);
         if (ImGui.InputInt($"##qty-{key}", ref qty, 0))
@@ -506,6 +530,22 @@ public sealed class ListTab
             if (slots > Planner.MaxListingSlots) slots = Planner.MaxListingSlots;
             editedSlots[key] = slots;
         }
+
+        ImGui.SameLine(0, 4);
+        var maxDisabled = r.Qty <= 0;
+        if (maxDisabled) ImGui.BeginDisabled();
+        if (ImGui.SmallButton($"MAX##max-{key}"))
+        {
+            var qPer = System.Math.Min(r.MaxStack, r.Qty);
+            if (qPer < 1) qPer = r.MaxStack;
+            var freeSlots = ResolveFreeListingSlots(sourceKey);
+            var neededSlots = qPer > 0 ? (r.Qty + qPer - 1) / qPer : 0;
+            var targetSlots = System.Math.Min(freeSlots, neededSlots);
+            if (targetSlots < 0) targetSlots = 0;
+            editedQtyPer[key] = qPer;
+            editedSlots[key] = targetSlots;
+        }
+        if (maxDisabled) ImGui.EndDisabled();
     }
 
     private void DrawPriceInput(string key)
@@ -587,48 +627,47 @@ public sealed class ListTab
             editedPrice[priceKey] = p;
         };
 
-        // sourceKey をパース: "retainer.X" or "char.X.bag" or "char.X.saddle"
-        var hash = priceKey.IndexOf('#');
-        var sourceKey = hash > 0 ? priceKey.Substring(0, hash) : string.Empty;
-
-        // 1) sourceKey が retainer のもので、そのリテイナーで該当アイテム出品中ならその slot 経由
-        if (configuration.Snapshots.TryGetValue(sourceKey, out var srcSnap))
-        {
-            if (TryFetchViaListingOnAnyRetainer(itemId, isHQ, prefer: srcSnap.Key))
-                return;
-        }
-
-        // 2) char source (bag/saddle): 全リテイナーをスキャンして、誰かが出品中ならその slot 経由
-        if (TryFetchViaListingOnAnyRetainer(itemId, isHQ, prefer: null))
-            return;
-
-        // 3) フォールバック: ContextMenu 経由。動かない環境では空振りするが
-        // 試すしかない (将来この経路が直れば未出品アイテムも fetch 可能になる)。
-        Plugin.Log.Information("[Restocker] no listing slot found, falling back to ContextMenu fetch");
-        executor.StartFetchMarketPriceForItem(itemId, isHQ);
+        // 現在開いている active retainer の listing 経由でのみ fetch (別リテイナーへ
+        // 自動巡回はしない)。出品中でなければ何も起きない (warning ログのみ)。
+        TryFetchViaActiveRetainerListing(itemId, isHQ);
     }
 
     /// <summary>
-    /// 該当アイテムが出品中のリテイナーを探し、その listing slot を開いて
-    /// ComparePrices で市場価格を MarketCache に取り込む。prefer が指定されて
-    /// いればそのリテイナーを優先する。見つからなければ false。
+    /// 「現在 RetainerSellList が開いている active retainer」でだけ fetch を試みる。
+    /// 別リテイナーへの自動巡回は行なわない (ユーザの現在セッションが奪われ、
+    /// 元のリテイナーに戻れず作業を中断させてしまうため)。active retainer で
+    /// 該当アイテムが出品されていなければ何もしない (false)。
     /// </summary>
-    private bool TryFetchViaListingOnAnyRetainer(uint itemId, bool isHQ, string? prefer)
+    private bool TryFetchViaActiveRetainerListing(uint itemId, bool isHQ)
     {
-        var candidates = configuration.Snapshots.Values.ToList();
-        if (!string.IsNullOrEmpty(prefer))
-            candidates = candidates.OrderByDescending(s => s.Key == prefer).ToList();
-
-        foreach (var snap in candidates)
+        if (!Common.AddonHelper.IsOpen("RetainerSellList"))
         {
-            if (snap.Listings.Any(l => l.ItemId == itemId && l.IsHQ == isHQ))
-            {
-                Plugin.Log.Information($"[Restocker] fetching single listing via {snap.RetainerName} (item={itemId} hq={isHQ})");
-                if (executor.StartFetchMarketPriceForListing(snap.Key, itemId, isHQ))
-                    return true;
-            }
+            Plugin.Log.Warning("[Restocker] cannot fetch: RetainerSellList is not open. Open the retainer that has this item listed first.");
+            return false;
         }
-        return false;
+        var activeSnap = ResolveActiveRetainerSnapshot();
+        if (activeSnap == null)
+        {
+            Plugin.Log.Warning("[Restocker] cannot fetch: no active retainer snapshot");
+            return false;
+        }
+        if (!activeSnap.Listings.Any(l => l.ItemId == itemId && l.IsHQ == isHQ))
+        {
+            Plugin.Log.Warning($"[Restocker] active retainer {activeSnap.RetainerName} does not list item={itemId} hq={isHQ}; cannot fetch via listing slot");
+            return false;
+        }
+        Plugin.Log.Information($"[Restocker] fetching via active retainer {activeSnap.RetainerName} (item={itemId} hq={isHQ})");
+        return executor.StartFetchMarketPriceForListing(activeSnap.Key, itemId, isHQ);
+    }
+
+    private unsafe Data.RetainerSnapshot? ResolveActiveRetainerSnapshot()
+    {
+        var rm = RetainerManager.Instance();
+        if (rm == null || !rm->IsReady) return null;
+        var ar = rm->GetActiveRetainer();
+        if (ar == null) return null;
+        var name = ar->NameString;
+        return configuration.Snapshots.Values.FirstOrDefault(s => s.RetainerName == name);
     }
 
     private void DrawPlanCell(string sourceKey, Row r)

@@ -39,7 +39,11 @@ public static class Planner
     {
         var result = new List<PlannedAction>();
         if (maxStackPerListing <= 0) return result;
-        var qtyPer = perListingQty.HasValue && perListingQty.Value > 0
+        // 明示的に 0 を渡された場合は 0 件とする (UI で「個数 0 / 枠数 0」と
+        // 入っている行は意図的に対象外、というのが直感的なため)
+        if (perListingQty.HasValue && perListingQty.Value <= 0) return result;
+        if (listingsCap.HasValue && listingsCap.Value <= 0) return result;
+        var qtyPer = perListingQty.HasValue
             ? Math.Min(perListingQty.Value, maxStackPerListing)
             : maxStackPerListing;
 
@@ -115,7 +119,9 @@ public static class Planner
     {
         var result = new List<PlannedAction>();
         if (maxStackPerListing <= 0) return result;
-        var qtyPer = perListingQty.HasValue && perListingQty.Value > 0
+        if (perListingQty.HasValue && perListingQty.Value <= 0) return result;
+        if (listingsCap.HasValue && listingsCap.Value <= 0) return result;
+        var qtyPer = perListingQty.HasValue
             ? Math.Min(perListingQty.Value, maxStackPerListing)
             : maxStackPerListing;
 
