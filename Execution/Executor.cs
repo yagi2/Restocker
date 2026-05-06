@@ -581,8 +581,10 @@ public sealed unsafe class Executor : IDisposable
         switch (action.Kind)
         {
             case PlannedActionKind.FetchMarketPrice:
+                // listing 行クリックは ContextMenu を開く。そこから「価格を変更する」
+                // を選んで初めて RetainerSell ダイアログが開く。
                 ClickListingSlot(action.ListingIndex);
-                State = ExecutionState.FetchAwaitingSellDialog;
+                State = ExecutionState.AwaitingContextMenu;
                 waitingSince = null;
                 Throttle();
                 return;
@@ -705,25 +707,33 @@ public sealed unsafe class Executor : IDisposable
     private void TickClickingPutUpForSale()
     {
         if (waitingSince == null) waitingSince = DateTime.UtcNow;
-        if (ContextMenuHelper.ClickEntry(AddonText.IsPutUpForSaleEntry))
+        var nextKind = currentJobActions.Count > 0 ? currentJobActions.Peek().Kind : PlannedActionKind.NewListing;
+
+        // FetchMarketPrice (= 既存出品の listing 行クリック後) は「価格を変更する」を選ぶ。
+        // それ以外 (NewListing 系) は「マーケットに出品する」を選ぶ。
+        Predicate<string> predicate = nextKind == PlannedActionKind.FetchMarketPrice
+            ? AddonText.IsAdjustPriceEntry
+            : AddonText.IsPutUpForSaleEntry;
+        var label = nextKind == PlannedActionKind.FetchMarketPrice ? "adjust-price" : "put-up-for-sale";
+
+        if (ContextMenuHelper.ClickEntry(predicate))
         {
             waitingSince = null;
-            // FetchMarketPriceViaInventory なら ComparePrices 経路へ、
-            // 通常の NewListing なら価格/数量入力 → Confirm 経路へ。
-            var nextKind = currentJobActions.Count > 0 ? currentJobActions.Peek().Kind : PlannedActionKind.NewListing;
-            State = nextKind == PlannedActionKind.FetchMarketPriceViaInventory
-                ? ExecutionState.FetchAwaitingSellDialog
-                : ExecutionState.AwaitingSellDialog;
+            State = nextKind switch
+            {
+                PlannedActionKind.FetchMarketPrice => ExecutionState.FetchAwaitingSellDialog,
+                PlannedActionKind.FetchMarketPriceViaInventory => ExecutionState.FetchAwaitingSellDialog,
+                _ => ExecutionState.AwaitingSellDialog,
+            };
             Throttle();
             return;
         }
-        // テキスト一致でクリックできなかった: timeout でエントリ列を dump して諦める
         if (DateTime.UtcNow - waitingSince!.Value > TimeSpan.FromSeconds(3))
         {
             var entries = ContextMenuHelper.EnumerateEntries();
-            log.Warning($"[Restocker] put-up-for-sale entry not found in ContextMenu. Entries: {string.Join(" | ", entries)}");
+            log.Warning($"[Restocker] {label} entry not found in ContextMenu. Entries: {string.Join(" | ", entries)}");
             ContextMenuHelper.Close();
-            Stop("put-up-for-sale entry not found in ContextMenu (see /xllog)");
+            Stop($"{label} entry not found in ContextMenu (see /xllog)");
         }
     }
 

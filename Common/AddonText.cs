@@ -81,6 +81,23 @@ public static class AddonText
         return false;
     }
 
+    /// <summary>RetainerSellList の listing 行クリック後の ContextMenu に出る「価格を変更する」系。</summary>
+    public static bool IsAdjustPriceEntry(string entryText)
+    {
+        if (string.IsNullOrEmpty(entryText)) return false;
+        if (entryText.Contains("価格を変更", StringComparison.Ordinal)) return true;
+        if (entryText.Contains("価格変更", StringComparison.Ordinal)) return true;
+        if (entryText.Contains("Adjust price", StringComparison.OrdinalIgnoreCase)) return true;
+        if (entryText.Contains("Preis ändern", StringComparison.OrdinalIgnoreCase)) return true;
+        if (entryText.Contains("Preis aendern", StringComparison.OrdinalIgnoreCase)) return true;
+        if (entryText.Contains("Changer le prix", StringComparison.OrdinalIgnoreCase)) return true;
+        if (entryText.Contains("Modifier le prix", StringComparison.OrdinalIgnoreCase)) return true;
+        if (entryText.Contains("修改价格")) return true;
+        if (entryText.Contains("调整价格")) return true;
+        if (entryText.Contains("가격 변경")) return true;
+        return false;
+    }
+
     /// <summary>右クリックメニューの「マーケットに出品する」系。Addon row 99 ベース + 多言語ハードコード。</summary>
     public static bool IsPutUpForSaleEntry(string entryText)
     {
