@@ -1,25 +1,27 @@
 using System;
-using System.Collections.Generic;
 using Dalamud.Game.Network.Structures;
 using Dalamud.Plugin.Services;
+using FFXIVClientStructs.FFXIV.Client.Game;
 
 namespace Restocker.Market;
 
 /// <summary>
 /// Dalamud の <see cref="IMarketBoard.OfferingsReceived"/> イベントで
 /// マーケットボード検索結果を受信して <see cref="MarketCache"/> を更新する。
-///
-/// 旧実装は <c>ItemSearchResult</c> addon を polling していたが、
-/// レイアウト変更や node id 揺れで取りこぼしが起きていた。Dalamud のイベント
-/// 経由なら listing struct から PricePerUnit/IsHq を直接読めるので確実。
-///
-/// PennyPincher など他プラグインも同経路。
+/// PennyPincher と同じ流儀で、
+///   - 自リテイナー listing はスキップ（自分で自分を undercut しない）
+///   - HQ / NQ それぞれで「サーバが返した順序の先頭にある有効 listing」を採用
+///     (server returns listings sorted by price ascending)
+/// その採用 price を 1 件だけ <see cref="MarketCache"/> に入れる。
 /// </summary>
 public sealed unsafe class MarketWatcher : IDisposable
 {
     private readonly IMarketBoard marketBoard;
     private readonly IPluginLog log;
     public MarketCache Cache { get; } = new();
+
+    /// <summary>同じ検索結果が複数回飛んでくる server エラー時の保護 (PennyPincher 由来)。</summary>
+    private int lastRequestId = -1;
 
     public MarketWatcher(IMarketBoard marketBoard, IPluginLog log)
     {
@@ -38,27 +40,51 @@ public sealed unsafe class MarketWatcher : IDisposable
         try
         {
             if (offerings.ItemListings.Count == 0) return;
+            if (offerings.RequestId == lastRequestId) return;
+            lastRequestId = offerings.RequestId;
+
             var itemId = offerings.ItemListings[0].ItemId;
             if (itemId == 0) return;
 
-            var hqPrices = new List<long>();
-            var nqPrices = new List<long>();
+            long? nqPrice = null;
+            long? hqPrice = null;
             foreach (var listing in offerings.ItemListings)
             {
                 if (listing.ItemId != itemId) continue;
+                if (IsOwnRetainer(listing.RetainerId)) continue;
                 var price = (long)listing.PricePerUnit;
                 if (price <= 0) continue;
-                (listing.IsHq ? hqPrices : nqPrices).Add(price);
+                if (listing.IsHq)
+                {
+                    if (hqPrice == null) hqPrice = price;
+                }
+                else
+                {
+                    if (nqPrice == null) nqPrice = price;
+                }
+                if (nqPrice != null && hqPrice != null) break;
             }
 
-            if (nqPrices.Count > 0) Cache.Replace(itemId, false, nqPrices);
-            if (hqPrices.Count > 0) Cache.Replace(itemId, true, hqPrices);
+            if (nqPrice.HasValue) Cache.Replace(itemId, false, new[] { nqPrice.Value });
+            if (hqPrice.HasValue) Cache.Replace(itemId, true, new[] { hqPrice.Value });
 
-            log.Information($"[Restocker] market cache updated via OfferingsReceived: item={itemId} nq={nqPrices.Count} hq={hqPrices.Count}");
+            log.Information($"[Restocker] cache update via OfferingsReceived: item={itemId} nq={nqPrice} hq={hqPrice}");
         }
         catch (Exception ex)
         {
             log.Error(ex, "[Restocker] OfferingsReceived handler exception");
         }
+    }
+
+    private static bool IsOwnRetainer(ulong retainerId)
+    {
+        var rm = RetainerManager.Instance();
+        if (rm == null) return false;
+        for (uint i = 0; i < rm->GetRetainerCount(); ++i)
+        {
+            var r = rm->GetRetainerBySortedIndex(i);
+            if (r != null && r->RetainerId == retainerId) return true;
+        }
+        return false;
     }
 }
