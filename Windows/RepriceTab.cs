@@ -26,6 +26,8 @@ public sealed class RepriceTab
     private string? lastMatchSummary;
     /// <summary>明示的に展開したリテイナーセクションの key。デフォルトは折りたたみ。</summary>
     private readonly HashSet<string> expandedSections = new();
+    /// <summary>「最安値 -Xギル」の X。セッション中のみ有効 (永続化しない)。</summary>
+    private int undercutDelta = 1;
 
     public RepriceTab(Configuration configuration, Executor executor, ConfirmDialog confirmDialog, MarketCache marketCache)
     {
@@ -146,12 +148,22 @@ public sealed class RepriceTab
             // callback で発火し、ContextMenu の「価格を変更する」→ RetainerSell →
             // ComparePrices → ItemSearchResult → MarketCache 更新を 1 件ずつ巡回する。
             // 完了後に offset を加味した値を editedPrice に書き込む。
-            var delta = configuration.UndercutDelta;
-            var undercutLabel = string.Format(Strings.RepriceMatchLowestForFormat, delta);
-            if (ImGui.SmallButton(undercutLabel + "##matchlowest-" + snap.Key))
+            // 「-Xギル」ボタンの X はボタン横の InputInt で都度指定 (ephemeral)。
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextUnformatted("-");
+            ImGui.SameLine(0, 2);
+            ImGui.SetNextItemWidth(60);
+            if (ImGui.InputInt($"##undercut-{snap.Key}", ref undercutDelta, 0))
+            {
+                if (undercutDelta < 0) undercutDelta = 0;
+            }
+            ImGui.SameLine(0, 4);
+            ImGui.TextUnformatted("g");
+            ImGui.SameLine();
+            if (ImGui.SmallButton(Strings.RepriceMatchLowestThisRetainer + "##matchlowest-" + snap.Key))
             {
                 var capturedSnap = snap;
-                var capturedOffset = -delta;
+                var capturedOffset = -undercutDelta;
                 executor.OnFetchMarketCompleted = () => ApplyMatchLowestForRetainer(capturedSnap, offset: capturedOffset);
                 executor.StartFetchMarketPricesForRetainer(snap.Key);
             }

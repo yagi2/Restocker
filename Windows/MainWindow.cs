@@ -132,17 +132,6 @@ public sealed class MainWindow : Window, IDisposable
 
         ImGui.Spacing();
 
-        var delta = configuration.UndercutDelta;
-        ImGui.SetNextItemWidth(120);
-        if (ImGui.InputInt(Strings.SettingsUndercutDelta, ref delta, 0))
-        {
-            if (delta < 0) delta = 0;
-            configuration.UndercutDelta = delta;
-            configuration.Save();
-        }
-
-        ImGui.Spacing();
-
         var langIdx = configuration.Language;
         var labels = new[]
         {

@@ -98,22 +98,6 @@ public static class Strings
         "依次获取每个挂牌的市场价并设定新价格。完成后按「应用」确认。",
         "각 등록 항목의 시세를 가져와 새 가격을 설정합니다. 이후 적용을 눌러 반영합니다.");
 
-    public static string SettingsUndercutDelta => T(
-        "Undercut delta (gil)",
-        "アンダーカット幅（ギル）",
-        "Unterbieten-Delta (Gil)",
-        "Décote (gil)",
-        "压价幅度（金币）",
-        "언더컷 폭(길)");
-
-    public static string RepriceMatchLowestForFormat => T(
-        "All items: lowest -{0}g",
-        "全てのアイテム: 最安値 -{0}ギル",
-        "Alle: Mindestpreis -{0} Gil",
-        "Tout : prix min -{0} gil",
-        "全部: 最低价 -{0}金币",
-        "전체: 최저가 -{0}길");
-
     public static string RepriceMatchLowestExactThisRetainer => T(
         "Match lowest (exact) for all items",
         "全てのアイテムを最安値で価格更新",
@@ -123,9 +107,9 @@ public static class Strings
         "최저가 그대로 (이 리테이너)");
 
     public static string RepriceMatchLowestThisRetainer => T(
-        "Match lowest -1g for all items",
-        "全てのアイテムを最安値 -1ギルで価格更新",
-        "-1 Gil (nur dieser Gehilfe)",
+        "Match lowest minus this for all items",
+        "全てのアイテムを最安値 -X ギルで価格更新",
+        "-X Gil (nur dieser Gehilfe)",
         "-1 gil (cet intendant)",
         "本雇员 -1 金币",
         "이 리테이너에 -1길");
