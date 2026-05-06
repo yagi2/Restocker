@@ -609,87 +609,106 @@ public sealed unsafe class Executor : IDisposable
     };
 
     /// <summary>
-    /// サドル所在のアイテムを「出品 1 件分だけ」キャラバッグに移動する。
-    /// SplitItem で正確に必要数だけ切り出してから MoveItemSlot で空きスロットへ。
-    /// 成功時 true。
+    /// サドル → キャラバッグ への **bulk staging**。
+    /// この (sourceKey, itemId, isHQ) のキューに残っている全アクションが必要とする
+    /// 合計 qty をまとめて事前にキャラバッグへ移す。SplitItem は使わず、
+    /// 該当アイテムを持つ saddle slot を whole で MoveItemSlot していく。
+    /// 既にキャラバッグに必要数あれば false (no-op)。
     /// </summary>
     private bool TryStageSaddleToCharBag(PlannedAction action)
     {
         var im = InventoryManager.Instance();
         if (im == null) return false;
 
-        // 1) 該当アイテムを持つサドルスロットを探す
-        var saddleSrcType = (InventoryType)0;
-        var saddleSrcSlot = -1;
-        var saddleSrcQty = 0;
-        foreach (var t in SaddleContainers)
+        // 1) この source / item / hq に対する total needed を queue から計算
+        long totalNeeded = 0;
+        foreach (var a in currentJobActions)
         {
-            var c = im->GetInventoryContainer(t);
-            if (c == null || !c->IsLoaded) continue;
-            for (var i = 0; i < c->Size; i++)
-            {
-                var item = c->GetInventorySlot(i);
-                if (item == null || item->ItemId != action.ItemId) continue;
-                var hq = (item->Flags & InventoryItem.ItemFlags.HighQuality) != 0;
-                if (hq != action.IsHQ) continue;
-                if (item->Quantity < action.Quantity) continue;
-                saddleSrcType = t;
-                saddleSrcSlot = i;
-                saddleSrcQty = (int)item->Quantity;
-                break;
-            }
-            if (saddleSrcSlot >= 0) break;
+            if (a.Kind != PlannedActionKind.NewListing) continue;
+            if (a.ItemId != action.ItemId) continue;
+            if (a.IsHQ != action.IsHQ) continue;
+            if (a.SourceKey != action.SourceKey) continue;
+            totalNeeded += a.Quantity;
         }
-        if (saddleSrcSlot < 0)
-        {
-            log.Warning($"[Restocker] saddle staging: no saddle slot has item={action.ItemId} hq={action.IsHQ} qty>={action.Quantity}");
-            return false;
-        }
+        if (totalNeeded <= 0) return false;
 
-        // 2) キャラバッグの空きスロットを探す
-        var charBagType = (InventoryType)0;
-        var freeCharSlot = -1;
+        // 2) 既にキャラバッグにある量を集計
+        long inCharBag = 0;
         foreach (var t in CharBagContainers)
         {
             var c = im->GetInventoryContainer(t);
             if (c == null || !c->IsLoaded) continue;
             for (var i = 0; i < c->Size; i++)
             {
-                var item = c->GetInventorySlot(i);
-                if (item == null) continue;
-                if (item->ItemId == 0)
-                {
-                    charBagType = t;
-                    freeCharSlot = i;
-                    break;
-                }
+                var it = c->GetInventorySlot(i);
+                if (it == null || it->ItemId != action.ItemId) continue;
+                var hq = (it->Flags & InventoryItem.ItemFlags.HighQuality) != 0;
+                if (hq != action.IsHQ) continue;
+                inCharBag += it->Quantity;
             }
-            if (freeCharSlot >= 0) break;
         }
-        if (freeCharSlot < 0)
+        if (inCharBag >= totalNeeded) return false; // 充足済み、staging 不要
+
+        var remaining = totalNeeded - inCharBag;
+
+        // 3) saddle slot を whole で char bag の空きスロットへ。
+        //    必要数を満たすまで複数 slot を順に動かす。
+        var anyMoved = false;
+        long movedTotal = 0;
+        foreach (var t in SaddleContainers)
         {
-            log.Warning("[Restocker] saddle staging: no free char bag slot");
-            return false;
+            var c = im->GetInventoryContainer(t);
+            if (c == null) continue;
+            for (var i = 0; i < c->Size; i++)
+            {
+                if (movedTotal >= remaining) break;
+                var item = c->GetInventorySlot(i);
+                if (item == null || item->ItemId != action.ItemId) continue;
+                var hq = (item->Flags & InventoryItem.ItemFlags.HighQuality) != 0;
+                if (hq != action.IsHQ) continue;
+                if (item->Quantity == 0) continue;
+
+                // 空きキャラバッグスロットを探す
+                var freeBagType = (InventoryType)0;
+                var freeBagSlot = -1;
+                foreach (var bt in CharBagContainers)
+                {
+                    var bc = im->GetInventoryContainer(bt);
+                    if (bc == null || !bc->IsLoaded) continue;
+                    for (var bi = 0; bi < bc->Size; bi++)
+                    {
+                        var bit = bc->GetInventorySlot(bi);
+                        if (bit != null && bit->ItemId == 0)
+                        {
+                            freeBagType = bt;
+                            freeBagSlot = bi;
+                            break;
+                        }
+                    }
+                    if (freeBagSlot >= 0) break;
+                }
+                if (freeBagSlot < 0)
+                {
+                    log.Warning("[Restocker] saddle bulk-stage: no free char bag slot, stopping early");
+                    return anyMoved;
+                }
+
+                var qty = item->Quantity;
+                var ret = im->MoveItemSlot(t, (ushort)i,
+                    freeBagType, (ushort)freeBagSlot, false);
+                log.Information($"[Restocker] bulk-stage saddle {t}#{i}({qty}) → char {freeBagType}#{freeBagSlot} ret={ret}");
+                anyMoved = true;
+                movedTotal += qty;
+            }
+            if (movedTotal >= remaining) break;
         }
 
-        // 3) 必要数だけ切り出して空きスロットへ。
-        //    saddleSrcQty == action.Quantity の場合は丸ごと移動。
-        //    それ以上の場合は SplitItem で qty を切り出してから移動。
-        if (saddleSrcQty == action.Quantity)
+        if (!anyMoved)
         {
-            var ret = im->MoveItemSlot(saddleSrcType, (ushort)saddleSrcSlot,
-                charBagType, (ushort)freeCharSlot, false);
-            log.Information($"[Restocker] stage saddle slot ({saddleSrcQty}) → char#{freeCharSlot} ret={ret}");
-        }
-        else
-        {
-            var split = im->SplitItem(saddleSrcType, (ushort)saddleSrcSlot, action.Quantity);
-            var ret = im->MoveItemSlot(saddleSrcType, (ushort)saddleSrcSlot,
-                charBagType, (ushort)freeCharSlot, false);
-            log.Information($"[Restocker] split {action.Quantity} from saddle → char#{freeCharSlot} (split ret={split}, move ret={ret})");
+            log.Warning($"[Restocker] saddle bulk-stage: no saddle slot has item={action.ItemId} hq={action.IsHQ}");
         }
         waitingSince = null;
-        return true;
+        return anyMoved;
     }
 
     // ---------------- FetchMarketPrice flow ----------------
