@@ -22,10 +22,8 @@ public sealed class ListTab
     private readonly Configuration configuration;
     private readonly Executor executor;
     private readonly ConfirmDialog confirmDialog;
-    private readonly MarketCache marketCache;
     private string filter = string.Empty;
     private bool listableOnly = true;
-    private string? lastMatchSummary;
     /// <summary>編集中の価格。キーは "{sourceKey}#{itemId}.{hq}"。</summary>
     private readonly Dictionary<string, long> editedPrice = new();
     /// <summary>1 出品あたりの個数。0/未設定なら MaxStackPerListing。</summary>
@@ -37,12 +35,11 @@ public sealed class ListTab
     /// <summary>明示的に展開したセクションの id。デフォルトは折りたたみ。</summary>
     private readonly HashSet<string> expandedSections = new();
 
-    public ListTab(Configuration configuration, Executor executor, ConfirmDialog confirmDialog, MarketCache marketCache)
+    public ListTab(Configuration configuration, Executor executor, ConfirmDialog confirmDialog)
     {
         this.configuration = configuration;
         this.executor = executor;
         this.confirmDialog = confirmDialog;
-        this.marketCache = marketCache;
     }
 
     public void Draw()
@@ -78,79 +75,8 @@ public sealed class ListTab
         // 適用ボタン
         ImGui.SameLine();
         DrawApplyButton();
-
-        if (!string.IsNullOrEmpty(lastMatchSummary))
-        {
-            ImGui.TextColored(new System.Numerics.Vector4(0.85f, 0.85f, 0.4f, 1f), lastMatchSummary);
-        }
     }
 
-    /// <summary>
-    /// 表示中の listable な (ItemId, IsHQ) について MarketCache から
-    /// 外れ値除外つき最安値を引いて editedPrice にセットする。
-    /// offset = -1 なら最安値 -1ギル。データ無しのアイテムは missing として
-    /// summary 表示する (ユーザーがマーケットボードで開けば polling で埋まる)。
-    /// </summary>
-    private void ApplyMarketLowest(long offset)
-    {
-        var seen = new HashSet<(uint, bool)>();
-        var missing = new HashSet<(uint, bool, string)>();
-        var applied = 0;
-        var sheet = Plugin.DataManager.GetExcelSheet<Lumina.Excel.Sheets.Item>();
-
-        // リテイナー所持品 → そのリテイナー出品用 editedPrice
-        foreach (var snap in configuration.Snapshots.Values)
-        {
-            foreach (var entry in DistinctItems(snap.Inventory))
-            {
-                if (!entry.IsListable) continue;
-                ApplyOne(snap.Key, entry.ItemId, entry.IsHQ, sheet);
-            }
-        }
-        // キャラ所持品 / サドル → target retainer が選ばれてる場合のみ
-        foreach (var ch in configuration.Characters.Values)
-        {
-            var charKey = CharacterSnapshot.MakeKey(ch.CharacterContentId);
-            foreach (var entry in DistinctItems(ch.Bag))
-            {
-                if (!entry.IsListable) continue;
-                ApplyOne(charKey + ".bag", entry.ItemId, entry.IsHQ, sheet);
-            }
-            foreach (var entry in DistinctItems(ch.Saddlebag.Concat(ch.PremiumSaddlebag).ToList()))
-            {
-                if (!entry.IsListable) continue;
-                ApplyOne(charKey + ".saddle", entry.ItemId, entry.IsHQ, sheet);
-            }
-        }
-
-        if (missing.Count == 0)
-            lastMatchSummary = string.Format(Strings.MatchAppliedSummary, applied, seen.Count);
-        else
-            lastMatchSummary = string.Format(Strings.MatchAppliedSummaryWithMissing, applied, seen.Count, missing.Count,
-                string.Join(", ", missing.Take(5).Select(m => m.Item3)) + (missing.Count > 5 ? "…" : ""));
-
-        void ApplyOne(string sourceKey, uint itemId, bool isHQ, Lumina.Excel.ExcelSheet<Lumina.Excel.Sheets.Item> s)
-        {
-            // フィルタ確認 (アイテム名で絞り込まれているもののみ対象)
-            var name = s.TryGetRow(itemId, out var row) ? row.Name.ExtractText() : $"#{itemId}";
-            if (isHQ) name += " (HQ)";
-            if (filter.Length > 0 && !name.Contains(filter, System.StringComparison.OrdinalIgnoreCase)) return;
-            if (listableOnly && s.TryGetRow(itemId, out var r2) && r2.ItemSearchCategory.RowId == 0) return;
-
-            seen.Add((itemId, isHQ));
-            if (!marketCache.HasData(itemId, isHQ))
-            {
-                missing.Add((itemId, isHQ, name));
-                return;
-            }
-            var lowest = marketCache.GetLowest(itemId, isHQ);
-            if (lowest <= 0) return;
-            var newPrice = lowest + offset;
-            if (newPrice <= 0) newPrice = 1;
-            editedPrice[MakePriceKey(sourceKey, itemId, isHQ)] = newPrice;
-            applied++;
-        }
-    }
 
     private void DrawApplyButton()
     {
@@ -559,115 +485,18 @@ public sealed class ListTab
         }
     }
 
-    /// <summary>
-    /// 価格セル: 入力欄 + アイテム毎の「最安値」「-1g」クイックボタンを並べる。
-    /// </summary>
+    /// <summary>価格セル: 入力欄のみ。新規出品では fetch 経路が無い (RetainerSell ダイアログを
+    /// 未出品アイテム用に開く API が現環境で動かない) ので、最安/-1g は価格更新タブ専用にした。</summary>
     private void DrawPriceCell(string sourceKey, Row r)
     {
         var key = MakePriceKey(sourceKey, r.ItemId, r.IsHQ);
         var v = (int)editedPrice.GetValueOrDefault(key, 0);
-        ImGui.SetNextItemWidth(90);
+        ImGui.SetNextItemWidth(-1);
         if (ImGui.InputInt($"##price-{key}", ref v, 0))
         {
             if (v < 0) v = 0;
             editedPrice[key] = v;
         }
-        ImGui.SameLine(0, 4);
-        DrawPriceQuickButtons(sourceKey, r.ItemId, r.IsHQ);
-    }
-
-    /// <summary>
-    /// 1 行ぶんの「最安値」/「-1ギル」クイックボタン。
-    /// MarketCache にデータがあればそのまま使い、無ければ Executor に
-    /// インベントリ経由 (新規出品ダイアログ → ComparePrices) で fetch を依頼。
-    /// fetch 完了時に OnFetchMarketCompleted で価格を反映する。
-    /// </summary>
-    private void DrawPriceQuickButtons(string sourceKey, uint itemId, bool isHQ)
-    {
-        var key = MakePriceKey(sourceKey, itemId, isHQ);
-        var cached = marketCache.HasData(itemId, isHQ);
-        var busy = executor.IsRunning;
-
-        if (busy) ImGui.BeginDisabled();
-        if (ImGui.SmallButton($"{Strings.QuickLowest}##q-{sourceKey}-{itemId}-{(isHQ ? 1 : 0)}"))
-        {
-            ApplyOrFetchAndApply(itemId, isHQ, key, offset: 0);
-        }
-        ImGui.SameLine(0, 4);
-        if (ImGui.SmallButton($"{Strings.QuickLowestMinus1}##q1-{sourceKey}-{itemId}-{(isHQ ? 1 : 0)}"))
-        {
-            ApplyOrFetchAndApply(itemId, isHQ, key, offset: -1);
-        }
-        if (busy) ImGui.EndDisabled();
-        else if (!cached)
-        {
-            // disabled じゃなく押せる (fetch 発火する) ので tooltip だけ
-            if (ImGui.IsItemHovered())
-                ImGui.SetTooltip(Strings.MarketDataNeeded);
-        }
-    }
-
-    private void ApplyOrFetchAndApply(uint itemId, bool isHQ, string priceKey, long offset)
-    {
-        // ユーザー要望: 最安/-1g は **常に最新のマーケット相場を確認** してから
-        // 適用する。古い cache を使うと「最安」と称して過去の値段が入ってしまうため。
-        // よって cache 早期リターンは行わない。
-        Plugin.Log.Information($"[Restocker] fetch market price (always fresh) for item={itemId} hq={isHQ} priceKey={priceKey}");
-
-        executor.OnFetchMarketCompleted = () =>
-        {
-            var l = marketCache.GetLowest(itemId, isHQ);
-            if (l <= 0)
-            {
-                Plugin.Log.Warning($"[Restocker] fetch completed but no market data for item={itemId} hq={isHQ}");
-                return;
-            }
-            var p = l + offset;
-            if (p <= 0) p = 1;
-            editedPrice[priceKey] = p;
-        };
-
-        // 現在開いている active retainer の listing 経由でのみ fetch (別リテイナーへ
-        // 自動巡回はしない)。出品中でなければ何も起きない (warning ログのみ)。
-        TryFetchViaActiveRetainerListing(itemId, isHQ);
-    }
-
-    /// <summary>
-    /// 「現在 RetainerSellList が開いている active retainer」でだけ fetch を試みる。
-    /// 別リテイナーへの自動巡回は行なわない (ユーザの現在セッションが奪われ、
-    /// 元のリテイナーに戻れず作業を中断させてしまうため)。active retainer で
-    /// 該当アイテムが出品されていなければ何もしない (false)。
-    /// </summary>
-    private bool TryFetchViaActiveRetainerListing(uint itemId, bool isHQ)
-    {
-        if (!Common.AddonHelper.IsOpen("RetainerSellList"))
-        {
-            Plugin.Log.Warning("[Restocker] cannot fetch: RetainerSellList is not open. Open the retainer that has this item listed first.");
-            return false;
-        }
-        var activeSnap = ResolveActiveRetainerSnapshot();
-        if (activeSnap == null)
-        {
-            Plugin.Log.Warning("[Restocker] cannot fetch: no active retainer snapshot");
-            return false;
-        }
-        if (!activeSnap.Listings.Any(l => l.ItemId == itemId && l.IsHQ == isHQ))
-        {
-            Plugin.Log.Warning($"[Restocker] active retainer {activeSnap.RetainerName} does not list item={itemId} hq={isHQ}; cannot fetch via listing slot");
-            return false;
-        }
-        Plugin.Log.Information($"[Restocker] fetching via active retainer {activeSnap.RetainerName} (item={itemId} hq={isHQ})");
-        return executor.StartFetchMarketPriceForListing(activeSnap.Key, itemId, isHQ);
-    }
-
-    private unsafe Data.RetainerSnapshot? ResolveActiveRetainerSnapshot()
-    {
-        var rm = RetainerManager.Instance();
-        if (rm == null || !rm->IsReady) return null;
-        var ar = rm->GetActiveRetainer();
-        if (ar == null) return null;
-        var name = ar->NameString;
-        return configuration.Snapshots.Values.FirstOrDefault(s => s.RetainerName == name);
     }
 
     private void DrawPlanCell(string sourceKey, Row r)
