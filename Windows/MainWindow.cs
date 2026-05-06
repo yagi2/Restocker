@@ -25,7 +25,7 @@ public sealed class MainWindow : Window, IDisposable
         this.configuration = configuration;
         this.executor = executor;
         this.repriceTab = new RepriceTab(configuration, executor, confirmDialog, marketWatcher.Cache);
-        this.listTab = new ListTab(configuration, executor, confirmDialog);
+        this.listTab = new ListTab(configuration, executor, confirmDialog, marketWatcher.Cache);
         SizeConstraints = new WindowSizeConstraints
         {
             MinimumSize = new Vector2(720, 420),

@@ -5,6 +5,7 @@ using Lumina.Excel.Sheets;
 using Restocker.Data;
 using Restocker.Execution;
 using Restocker.Localization;
+using Restocker.Market;
 using Restocker.Plan;
 
 namespace Restocker.Windows;
@@ -19,8 +20,10 @@ public sealed class ListTab
     private readonly Configuration configuration;
     private readonly Executor executor;
     private readonly ConfirmDialog confirmDialog;
+    private readonly MarketCache marketCache;
     private string filter = string.Empty;
     private bool listableOnly = true;
+    private string? lastMatchSummary;
     /// <summary>編集中の価格。キーは "{sourceKey}#{itemId}.{hq}"。</summary>
     private readonly Dictionary<string, long> editedPrice = new();
     /// <summary>キャラ所持品セクションごとの「出品先リテイナー key」選択。キーは char source key。</summary>
@@ -28,11 +31,12 @@ public sealed class ListTab
     /// <summary>明示的に展開したセクションの id。デフォルトは折りたたみ。</summary>
     private readonly HashSet<string> expandedSections = new();
 
-    public ListTab(Configuration configuration, Executor executor, ConfirmDialog confirmDialog)
+    public ListTab(Configuration configuration, Executor executor, ConfirmDialog confirmDialog, MarketCache marketCache)
     {
         this.configuration = configuration;
         this.executor = executor;
         this.confirmDialog = confirmDialog;
+        this.marketCache = marketCache;
     }
 
     public void Draw()
@@ -66,11 +70,93 @@ public sealed class ListTab
             }
         }
         ImGui.SameLine();
+        if (ImGui.Button(Strings.ListMatchLowest + "##list-lowest"))
+        {
+            ApplyMarketLowest(offset: 0);
+        }
+        ImGui.SameLine();
+        if (ImGui.Button(Strings.ListMatchLowestMinus1 + "##list-lowest-1"))
+        {
+            ApplyMarketLowest(offset: -1);
+        }
+        ImGui.SameLine();
         ImGui.TextDisabled($"{Strings.HQNQNote} / {Strings.NoTransfer}");
 
         // 適用ボタン
         ImGui.SameLine();
         DrawApplyButton();
+
+        if (!string.IsNullOrEmpty(lastMatchSummary))
+        {
+            ImGui.TextColored(new System.Numerics.Vector4(0.85f, 0.85f, 0.4f, 1f), lastMatchSummary);
+        }
+    }
+
+    /// <summary>
+    /// 表示中の listable な (ItemId, IsHQ) について MarketCache から
+    /// 外れ値除外つき最安値を引いて editedPrice にセットする。
+    /// offset = -1 なら最安値 -1ギル。データ無しのアイテムは missing として
+    /// summary 表示する (ユーザーがマーケットボードで開けば polling で埋まる)。
+    /// </summary>
+    private void ApplyMarketLowest(long offset)
+    {
+        var seen = new HashSet<(uint, bool)>();
+        var missing = new HashSet<(uint, bool, string)>();
+        var applied = 0;
+        var sheet = Plugin.DataManager.GetExcelSheet<Lumina.Excel.Sheets.Item>();
+
+        // リテイナー所持品 → そのリテイナー出品用 editedPrice
+        foreach (var snap in configuration.Snapshots.Values)
+        {
+            foreach (var entry in DistinctItems(snap.Inventory))
+            {
+                if (!entry.IsListable) continue;
+                ApplyOne(snap.Key, entry.ItemId, entry.IsHQ, sheet);
+            }
+        }
+        // キャラ所持品 / サドル → target retainer が選ばれてる場合のみ
+        foreach (var ch in configuration.Characters.Values)
+        {
+            var charKey = CharacterSnapshot.MakeKey(ch.CharacterContentId);
+            foreach (var entry in DistinctItems(ch.Bag))
+            {
+                if (!entry.IsListable) continue;
+                ApplyOne(charKey + ".bag", entry.ItemId, entry.IsHQ, sheet);
+            }
+            foreach (var entry in DistinctItems(ch.Saddlebag.Concat(ch.PremiumSaddlebag).ToList()))
+            {
+                if (!entry.IsListable) continue;
+                ApplyOne(charKey + ".saddle", entry.ItemId, entry.IsHQ, sheet);
+            }
+        }
+
+        if (missing.Count == 0)
+            lastMatchSummary = string.Format(Strings.MatchAppliedSummary, applied, seen.Count);
+        else
+            lastMatchSummary = string.Format(Strings.MatchAppliedSummaryWithMissing, applied, seen.Count, missing.Count,
+                string.Join(", ", missing.Take(5).Select(m => m.Item3)) + (missing.Count > 5 ? "…" : ""));
+
+        void ApplyOne(string sourceKey, uint itemId, bool isHQ, Lumina.Excel.ExcelSheet<Lumina.Excel.Sheets.Item> s)
+        {
+            // フィルタ確認 (アイテム名で絞り込まれているもののみ対象)
+            var name = s.TryGetRow(itemId, out var row) ? row.Name.ExtractText() : $"#{itemId}";
+            if (isHQ) name += " (HQ)";
+            if (filter.Length > 0 && !name.Contains(filter, System.StringComparison.OrdinalIgnoreCase)) return;
+            if (listableOnly && s.TryGetRow(itemId, out var r2) && r2.ItemSearchCategory.RowId == 0) return;
+
+            seen.Add((itemId, isHQ));
+            if (!marketCache.HasData(itemId, isHQ))
+            {
+                missing.Add((itemId, isHQ, name));
+                return;
+            }
+            var lowest = marketCache.GetLowest(itemId, isHQ);
+            if (lowest <= 0) return;
+            var newPrice = lowest + offset;
+            if (newPrice <= 0) newPrice = 1;
+            editedPrice[MakePriceKey(sourceKey, itemId, isHQ)] = newPrice;
+            applied++;
+        }
     }
 
     private void DrawApplyButton()

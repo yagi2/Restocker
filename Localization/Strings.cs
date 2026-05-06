@@ -155,6 +155,20 @@ public static class Strings
     public static string PlanCount => T("{0} listings", "{0}件", "{0} Posten", "{0} mises", "{0} 项", "{0}건");
     public static string PlanOverflow => T("{0} qty cannot fit", "※{0}個 余り", "{0} überzählig", "{0} en surplus", "余 {0} 个", "{0}개 초과");
     public static string ListSummary => T("To list: {0} item type(s)", "出品予定: {0} アイテム種", "Einzustellen: {0} Artikelart(en)", "À mettre en vente : {0} type(s)", "待上架：{0} 种物品", "등록 예정: {0} 종");
+    public static string ListMatchLowest => T(
+        "List at lowest",
+        "最安値で出品",
+        "Niedrigsten als Preis",
+        "Au plus bas",
+        "以最低价上架",
+        "최저가로 등록");
+    public static string ListMatchLowestMinus1 => T(
+        "List at lowest -1g",
+        "最安値 -1ギルで出品",
+        "Niedrigsten -1 G",
+        "Au plus bas -1 g",
+        "最低价 -1g 上架",
+        "최저가 -1길로 등록");
 
     // Confirm dialog
     public static string ConfirmTitle => T(
