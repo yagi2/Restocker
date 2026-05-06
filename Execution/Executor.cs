@@ -1088,9 +1088,24 @@ public sealed unsafe class Executor : IDisposable
         fetchSlotClickRetried = false;
 
         var act = currentJobActions.Peek();
-        // ComparePrices を click。AddonRetainerSell の event id 4 (Marketbuddy 慣例)
+
+        // RetainerSell が表示しているアイテム名と action の itemId が一致するか検証。
+        // snapshot stale や server 側の slot 並び替えで開いた dialog のアイテムが
+        // ズレることがあり、そのまま ComparePrices を投げると関係ない検索が走り
+        // server 応答とこちらの期待 itemId が永遠にズレる。
+        var sell = (AddonRetainerSell*)addon;
+        var dialogName = sell->ItemName != null ? sell->ItemName->NodeText.ToString() ?? string.Empty : string.Empty;
+        var sheet = Plugin.DataManager.GetExcelSheet<Lumina.Excel.Sheets.Item>();
+        var expectedName = sheet.TryGetRow(act.ItemId, out var row) ? row.Name.ExtractText() ?? string.Empty : string.Empty;
+        // dialogName 側に HQ アイコン () が含まれることがあるので、含み判定する
+        if (!string.IsNullOrEmpty(expectedName) && !dialogName.Contains(expectedName))
+        {
+            log.Warning($"[Restocker] dialog/snapshot mismatch: dialog='{dialogName}' expected='{expectedName}' (item={act.ItemId} slot={act.ListingIndex}); proceeding anyway");
+        }
+
+        // ComparePrices を click。AddonRetainerSell の event id 4
         Callback.Fire(addon, true, 4);
-        log.Information($"[Restocker] clicked ComparePrices for item={act.ItemId} hq={act.IsHQ} (slot={act.ListingIndex})");
+        log.Information($"[Restocker] clicked ComparePrices for item={act.ItemId} hq={act.IsHQ} (slot={act.ListingIndex}) dialog='{dialogName}'");
         State = ExecutionState.FetchAwaitingMarketData;
         waitingSince = DateTime.UtcNow;
         Throttle();
@@ -1129,14 +1144,17 @@ public sealed unsafe class Executor : IDisposable
 
         currentJobActions.Dequeue();
         CompletedActions++;
-        // 全 fetch 完了時の callback 発火 (1 ジョブ・最後のアクション直後でも問題無い)
         if (currentJobActions.Count == 0)
         {
             try { OnFetchMarketCompleted?.Invoke(); }
             catch (Exception ex) { log.Error(ex, "[Restocker] OnFetchMarketCompleted threw"); }
         }
         State = ExecutionState.PerformingAction;
-        Throttle();
+        // 次の listing click までの cooldown。server 側の前リクエストの応答遅延が
+        // 次の検索結果に紛れ込んで「OfferingsReceived for item=X ignored」が連発
+        // するのを抑える。短すぎると expected と違う応答が新しい listing 結果と誤認
+        // されるケースが残る。
+        Wait(TimeSpan.FromMilliseconds(800));
     }
 
     private void TickAwaitingNewListing()

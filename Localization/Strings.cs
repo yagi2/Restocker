@@ -98,6 +98,21 @@ public static class Strings
         "依次获取每个挂牌的市场价并设定新价格。完成后按「应用」确认。",
         "각 등록 항목의 시세를 가져와 새 가격을 설정합니다. 이후 적용을 눌러 반영합니다.");
 
+    public static string RepriceFillRetainer => T(
+        "fill",
+        "他にコピー",
+        "fill",
+        "remplir",
+        "填充",
+        "복사");
+    public static string RepriceFillTooltip => T(
+        "Copy this price to every other listing on this retainer.",
+        "この価格をこのリテイナーの他の全 listing にコピーします。",
+        "Diesen Preis auf alle anderen Posten dieses Gehilfen anwenden.",
+        "Copier ce prix sur toutes les autres mises de cet intendant.",
+        "将此价格复制到该雇员的所有其他挂牌。",
+        "이 가격을 이 리테이너의 다른 모든 등록에 복사.");
+
     public static string RepriceAddAllToPlan => T(
         "Add all to plan",
         "全てプランに追加",

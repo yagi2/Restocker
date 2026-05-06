@@ -330,18 +330,18 @@ public sealed class RepriceTab
             ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp |
             ImGuiTableFlags.NoSavedSettings;
 
-        // Item, Qty, Current, New, +Add = 5 + #
-        if (!ImGui.BeginTable($"##reprice-{snap.Key}", 6, flags)) return;
+        // #, Item, Qty, Current, New, fill, +Add = 7
+        if (!ImGui.BeginTable($"##reprice-{snap.Key}", 7, flags)) return;
 
         ImGui.TableSetupColumn("#", ImGuiTableColumnFlags.WidthFixed, 30);
-        ImGui.TableSetupColumn(Strings.ColItem, ImGuiTableColumnFlags.WidthStretch, 0.45f);
+        ImGui.TableSetupColumn(Strings.ColItem, ImGuiTableColumnFlags.WidthStretch, 0.42f);
         ImGui.TableSetupColumn(Strings.ColTotalQty, ImGuiTableColumnFlags.WidthFixed, 60);
-        ImGui.TableSetupColumn(Strings.ColCurrentPrice, ImGuiTableColumnFlags.WidthStretch, 0.22f);
-        ImGui.TableSetupColumn(Strings.ColNewPrice, ImGuiTableColumnFlags.WidthStretch, 0.22f);
+        ImGui.TableSetupColumn(Strings.ColCurrentPrice, ImGuiTableColumnFlags.WidthStretch, 0.2f);
+        ImGui.TableSetupColumn(Strings.ColNewPrice, ImGuiTableColumnFlags.WidthStretch, 0.2f);
+        ImGui.TableSetupColumn("##fill", ImGuiTableColumnFlags.WidthFixed, 70);
         ImGui.TableSetupColumn("##add", ImGuiTableColumnFlags.WidthFixed, 60);
         ImGui.TableHeadersRow();
 
-        var sheet = Plugin.DataManager.GetExcelSheet<Item>();
         foreach (var (l, name) in rows)
         {
             ImGui.TableNextRow();
@@ -356,10 +356,32 @@ public sealed class RepriceTab
             ImGui.TableNextColumn();
             DrawPriceInput($"{snap.Key}#{l.ListingIndex}");
             ImGui.TableNextColumn();
+            DrawFillButton(snap, l);
+            ImGui.TableNextColumn();
             DrawAddPlanButton(snap, l, name);
         }
 
         ImGui.EndTable();
+    }
+
+    /// <summary>この行で入力された価格を、同じリテイナーの他の全 listing の editedPrice にコピー。</summary>
+    private void DrawFillButton(RetainerSnapshot snap, ListingEntry sourceListing)
+    {
+        var sourceKey = $"{snap.Key}#{sourceListing.ListingIndex}";
+        var sourcePrice = editedPrice.GetValueOrDefault(sourceKey, 0);
+        var canFill = sourcePrice > 0;
+        if (!canFill) ImGui.BeginDisabled();
+        if (ImGui.SmallButton($"{Strings.RepriceFillRetainer}##fill-{sourceKey}"))
+        {
+            foreach (var l in snap.Listings)
+            {
+                if (l.ListingIndex == sourceListing.ListingIndex) continue;
+                editedPrice[$"{snap.Key}#{l.ListingIndex}"] = sourcePrice;
+            }
+            Plugin.Log.Information($"[Restocker] fill: copied {sourcePrice} to {snap.Listings.Count - 1} other listings on {snap.RetainerName}");
+        }
+        if (!canFill) ImGui.EndDisabled();
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip(Strings.RepriceFillTooltip);
     }
 
     private void DrawPriceInput(string key)
