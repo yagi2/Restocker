@@ -179,8 +179,8 @@ public static class Strings
     public static string StateReadingPrices => T("Reading current prices...", "現在価格を読み取り中...", "Lese aktuelle Preise...", "Lecture des prix...", "读取当前价格...", "현재 가격 읽는 중...");
     public static string StateAwaitingSellDialog => T("Waiting for sell dialog...", "出品ダイアログを待機...", "Warte auf Dialog...", "Attente boîte de vente...", "等待价格对话框...", "판매 대화상자 대기...");
     public static string StateConfirmingSellDialog => T("Confirming listing...", "出品を確定中...", "Bestätige Posten...", "Confirmation...", "确认上架...", "등록 확정 중...");
-    public static string StateAwaitingSaddleMove => T("Waiting for saddlebag→bag move...", "サドル→所持品の反映待ち...", "Warte auf Sattel→Tasche...", "Attente sacoche→sac...", "等待马鞍→背包...", "안장→가방 이동 대기...");
-    public static string StatePreStagingSaddle => T("Pre-staging saddlebag items to bag...", "サドルから所持品にステージング中...", "Bereite Sattel-Items vor...", "Préparation depuis sacoche...", "从马鞍预转入背包...", "안장→가방 사전 이동...");
+    public static string StateAwaitingSaddleMove => T("Waiting for saddlebag→bag move...", "チョコボかばん→所持品への移動を待機中...", "Warte auf Sattel→Tasche...", "Attente sacoche→sac...", "等待马鞍→背包...", "안장→가방 이동 대기...");
+    public static string StatePreStagingSaddle => T("Pre-staging saddlebag items to bag...", "チョコボかばんから所持品にアイテムを移動中...", "Bereite Sattel-Items vor...", "Préparation depuis sacoche...", "从马鞍预转入背包...", "안장→가방 사전 이동...");
     public static string StateAwaitingNewListing => T("Waiting for listing to land...", "出品反映を待機中...", "Warte auf Server-Bestätigung...", "Attente confirmation serveur...", "等待服务器确认...", "서버 반영 대기...");
     public static string StateFetchAwaitingMarketData => T("Reading market data...", "マーケット相場を取得中...", "Lese Marktdaten...", "Lecture du marché...", "读取市场数据...", "시장 데이터 조회 중...");
     public static string StateClosingSellList => T("Closing sell list...", "出品リストを閉じています...", "Schließe Liste...", "Fermeture...", "关闭上架列表...", "판매 목록 닫는 중...");
