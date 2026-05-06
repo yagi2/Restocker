@@ -73,9 +73,6 @@ public sealed class ListTab
                 expandedSections.Add("saddle-" + k);
             }
         }
-        ImGui.SameLine();
-        ImGui.TextDisabled($"{Strings.HQNQNote} / {Strings.NoTransfer}");
-
         // 適用ボタン
         ImGui.SameLine();
         DrawApplyButton();
@@ -583,16 +580,68 @@ public sealed class ListTab
             }
             return;
         }
-        // fetch via inventory dialog → on completion apply
+
+        // priceKey は "{sourceKey}#{itemId}.{hq}"。ContextMenu 経由 fetch は
+        // 環境によって動かない (現在の FFXIV では右クリックに「マーケットに出品」が
+        // 出ないことがある) ため、まずは「現在開いているリテイナーの出品中スロット」
+        // 経由で fetch を試みる。
+        Plugin.Log.Information($"[Restocker] fetch market price for item={itemId} hq={isHQ} priceKey={priceKey}");
+
         executor.OnFetchMarketCompleted = () =>
         {
             var l = marketCache.GetLowest(itemId, isHQ);
-            if (l <= 0) return;
+            if (l <= 0)
+            {
+                Plugin.Log.Warning($"[Restocker] fetch completed but no market data for item={itemId} hq={isHQ}");
+                return;
+            }
             var p = l + offset;
             if (p <= 0) p = 1;
             editedPrice[priceKey] = p;
         };
+
+        // sourceKey をパース: "retainer.X" or "char.X.bag" or "char.X.saddle"
+        var hash = priceKey.IndexOf('#');
+        var sourceKey = hash > 0 ? priceKey.Substring(0, hash) : string.Empty;
+
+        // 1) sourceKey が retainer のもので、そのリテイナーで該当アイテム出品中ならその slot 経由
+        if (configuration.Snapshots.TryGetValue(sourceKey, out var srcSnap))
+        {
+            if (TryFetchViaListingOnAnyRetainer(itemId, isHQ, prefer: srcSnap.Key))
+                return;
+        }
+
+        // 2) char source (bag/saddle): 全リテイナーをスキャンして、誰かが出品中ならその slot 経由
+        if (TryFetchViaListingOnAnyRetainer(itemId, isHQ, prefer: null))
+            return;
+
+        // 3) フォールバック: ContextMenu 経由。動かない環境では空振りするが
+        // 試すしかない (将来この経路が直れば未出品アイテムも fetch 可能になる)。
+        Plugin.Log.Information("[Restocker] no listing slot found, falling back to ContextMenu fetch");
         executor.StartFetchMarketPriceForItem(itemId, isHQ);
+    }
+
+    /// <summary>
+    /// 該当アイテムが出品中のリテイナーを探し、その listing slot を開いて
+    /// ComparePrices で市場価格を MarketCache に取り込む。prefer が指定されて
+    /// いればそのリテイナーを優先する。見つからなければ false。
+    /// </summary>
+    private bool TryFetchViaListingOnAnyRetainer(uint itemId, bool isHQ, string? prefer)
+    {
+        var candidates = configuration.Snapshots.Values.ToList();
+        if (!string.IsNullOrEmpty(prefer))
+            candidates = candidates.OrderByDescending(s => s.Key == prefer).ToList();
+
+        foreach (var snap in candidates)
+        {
+            if (snap.Listings.Any(l => l.ItemId == itemId && l.IsHQ == isHQ))
+            {
+                Plugin.Log.Information($"[Restocker] fetching single listing via {snap.RetainerName} (item={itemId} hq={isHQ})");
+                if (executor.StartFetchMarketPriceForListing(snap.Key, itemId, isHQ))
+                    return true;
+            }
+        }
+        return false;
     }
 
     private void DrawPlanCell(string sourceKey, Row r)

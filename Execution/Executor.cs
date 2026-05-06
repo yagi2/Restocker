@@ -124,6 +124,35 @@ public sealed unsafe class Executor : IDisposable
     }
 
     /// <summary>
+    /// 指定リテイナーで該当 (itemId, isHQ) が出品中なら、その listing slot を開いて
+    /// ComparePrices で市場価格を MarketCache に 1 件だけ取り込む。
+    /// 完了後 <see cref="OnFetchMarketCompleted"/> を発火する。
+    /// </summary>
+    public bool StartFetchMarketPriceForListing(string retainerKey, uint itemId, bool isHQ)
+    {
+        if (IsRunning) { log.Warning("[Restocker] Executor.Start while already running"); return false; }
+        if (!configuration.Snapshots.TryGetValue(retainerKey, out var snap)) return false;
+        var listing = snap.Listings.FirstOrDefault(l => l.ItemId == itemId && l.IsHQ == isHQ);
+        if (listing == null) return false;
+
+        var actions = new List<PlannedAction>
+        {
+            new PlannedAction
+            {
+                Kind = PlannedActionKind.FetchMarketPrice,
+                RetainerKey = retainerKey,
+                ItemId = itemId,
+                IsHQ = isHQ,
+                ListingIndex = listing.ListingIndex,
+            },
+        };
+        jobs.Clear();
+        jobs.Add(new RetainerVisitJob { RetainerName = snap.RetainerName, Actions = actions });
+        Begin(ExecutionMode.ApplyActions);
+        return true;
+    }
+
+    /// <summary>
     /// 指定したリテイナーの listings から「(itemId, isHQ) ユニーク × 1 listing slot」を抽出し、
     /// それぞれを開いて ComparePrices で市場価格を MarketCache に取り込む。
     /// 価格変更は行わない。完了後 <see cref="OnFetchMarketCompleted"/> を発火する。

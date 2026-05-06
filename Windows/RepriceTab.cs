@@ -63,9 +63,6 @@ public sealed class RepriceTab
             foreach (var snap in configuration.Snapshots.Values)
                 expandedSections.Add("reprice-" + snap.Key);
         }
-        ImGui.SameLine();
-        ImGui.TextDisabled(Strings.HQNQNote);
-
         // 適用ボタン
         ImGui.SameLine();
         DrawApplyButton();
@@ -200,8 +197,6 @@ public sealed class RepriceTab
                 executor.OnFetchMarketCompleted = () => ApplyMatchLowestForRetainer(capturedSnap);
                 executor.StartFetchMarketPricesForRetainer(snap.Key);
             }
-            ImGui.SameLine();
-            ImGui.TextDisabled(Strings.HQNQNote);
 
             DrawRetainerListings(snap, filteredListings);
         }
