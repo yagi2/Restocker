@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Restocker.Data;
@@ -32,10 +33,15 @@ public static class Planner
         bool isHQ,
         long unitPrice,
         int maxStackPerListing,
-        string? sourceKeyOverride = null)
+        string? sourceKeyOverride = null,
+        int? listingsCap = null,
+        int? perListingQty = null)
     {
         var result = new List<PlannedAction>();
         if (maxStackPerListing <= 0) return result;
+        var qtyPer = perListingQty.HasValue && perListingQty.Value > 0
+            ? Math.Min(perListingQty.Value, maxStackPerListing)
+            : maxStackPerListing;
 
         foreach (var snapshot in snapshots)
         {
@@ -49,9 +55,10 @@ public static class Planner
 
             var remaining = owned;
             var slotsLeft = freeSlots;
+            if (listingsCap.HasValue) slotsLeft = Math.Min(slotsLeft, Math.Max(0, listingsCap.Value));
 
-            // フル本数 (max stack) を埋める
-            while (remaining >= maxStackPerListing && slotsLeft > 0)
+            // フル本数 (qtyPer 個) を埋める
+            while (remaining >= qtyPer && slotsLeft > 0)
             {
                 result.Add(new PlannedAction
                 {
@@ -60,15 +67,17 @@ public static class Planner
                     SourceKey = sourceKeyOverride ?? snapshot.Key,
                     ItemId = itemId,
                     IsHQ = isHQ,
-                    Quantity = maxStackPerListing,
+                    Quantity = qtyPer,
                     UnitPrice = unitPrice,
                 });
-                remaining -= maxStackPerListing;
+                remaining -= qtyPer;
                 slotsLeft--;
             }
 
-            // 端数 1 本（スロットが余っているなら）
-            if (remaining > 0 && slotsLeft > 0)
+            // 端数 1 本: listingsCap で「**ちょうど N 枠**」と指定された場合は端数を出さない方が
+            // ユーザー意図に近い (1 枠だけ qtyPer 未満が混じると驚くため)。
+            // listingsCap 未指定 (= 全枠埋める) なら端数も出す。
+            if (!listingsCap.HasValue && remaining > 0 && slotsLeft > 0)
             {
                 result.Add(new PlannedAction
                 {
@@ -81,7 +90,6 @@ public static class Planner
                     UnitPrice = unitPrice,
                 });
             }
-            // それ以外（スロット枯渇）は呼び出し側で「N 個出品できなかった」と警告する責務。
         }
 
         return result;
@@ -101,10 +109,15 @@ public static class Planner
         uint itemId,
         bool isHQ,
         long unitPrice,
-        int maxStackPerListing)
+        int maxStackPerListing,
+        int? listingsCap = null,
+        int? perListingQty = null)
     {
         var result = new List<PlannedAction>();
         if (maxStackPerListing <= 0) return result;
+        var qtyPer = perListingQty.HasValue && perListingQty.Value > 0
+            ? Math.Min(perListingQty.Value, maxStackPerListing)
+            : maxStackPerListing;
 
         var owned = inventory.Where(e => e.ItemId == itemId && e.IsHQ == isHQ).Sum(e => e.Quantity);
         if (owned <= 0) return result;
@@ -114,8 +127,9 @@ public static class Planner
 
         var remaining = owned;
         var slotsLeft = freeSlots;
+        if (listingsCap.HasValue) slotsLeft = Math.Min(slotsLeft, Math.Max(0, listingsCap.Value));
 
-        while (remaining >= maxStackPerListing && slotsLeft > 0)
+        while (remaining >= qtyPer && slotsLeft > 0)
         {
             result.Add(new PlannedAction
             {
@@ -124,13 +138,13 @@ public static class Planner
                 SourceKey = sourceKey,
                 ItemId = itemId,
                 IsHQ = isHQ,
-                Quantity = maxStackPerListing,
+                Quantity = qtyPer,
                 UnitPrice = unitPrice,
             });
-            remaining -= maxStackPerListing;
+            remaining -= qtyPer;
             slotsLeft--;
         }
-        if (remaining > 0 && slotsLeft > 0)
+        if (!listingsCap.HasValue && remaining > 0 && slotsLeft > 0)
         {
             result.Add(new PlannedAction
             {

@@ -26,6 +26,10 @@ public sealed class ListTab
     private string? lastMatchSummary;
     /// <summary>編集中の価格。キーは "{sourceKey}#{itemId}.{hq}"。</summary>
     private readonly Dictionary<string, long> editedPrice = new();
+    /// <summary>1 出品あたりの個数。0/未設定なら MaxStackPerListing。</summary>
+    private readonly Dictionary<string, int> editedQtyPer = new();
+    /// <summary>出品枠数。0/未設定なら「保有量を埋め切るまで」。</summary>
+    private readonly Dictionary<string, int> editedSlots = new();
     /// <summary>キャラ所持品セクションごとの「出品先リテイナー key」選択。キーは char source key。</summary>
     private readonly Dictionary<string, string> charTargetRetainer = new();
     /// <summary>明示的に展開したセクションの id。デフォルトは折りたたみ。</summary>
@@ -183,7 +187,10 @@ public sealed class ListTab
             {
                 var key = MakePriceKey(snap.Key, entry.ItemId, entry.IsHQ);
                 if (!editedPrice.TryGetValue(key, out var price) || price <= 0) continue;
-                result.AddRange(Planner.PlanNewListings(new[] { snap }, entry.ItemId, entry.IsHQ, price, entry.MaxStackPerListing));
+                var (qtyPer, slots) = ResolveLots(key);
+                result.AddRange(Planner.PlanNewListings(
+                    new[] { snap }, entry.ItemId, entry.IsHQ, price, entry.MaxStackPerListing,
+                    listingsCap: slots, perListingQty: qtyPer));
             }
         }
         // 2) キャラバッグ・サドル → 選択された target リテイナーで「預け入れなし」直接出品
@@ -208,8 +215,21 @@ public sealed class ListTab
         {
             var pkey = MakePriceKey(sourceKey, entry.ItemId, entry.IsHQ);
             if (!editedPrice.TryGetValue(pkey, out var price) || price <= 0) continue;
-            result.AddRange(Planner.PlanFromInventoryList(inventory, sourceKey, target, entry.ItemId, entry.IsHQ, price, entry.MaxStackPerListing));
+            var (qtyPer, slots) = ResolveLots(pkey);
+            result.AddRange(Planner.PlanFromInventoryList(
+                inventory, sourceKey, target, entry.ItemId, entry.IsHQ, price, entry.MaxStackPerListing,
+                listingsCap: slots, perListingQty: qtyPer));
         }
+    }
+
+    /// <summary>edited dictionaries から (qtyPer, slots) を取り出す。0/未設定は null = Planner default。</summary>
+    private (int? qtyPer, int? slots) ResolveLots(string priceKey)
+    {
+        int? qtyPer = null;
+        int? slots = null;
+        if (editedQtyPer.TryGetValue(priceKey, out var q) && q > 0) qtyPer = q;
+        if (editedSlots.TryGetValue(priceKey, out var s) && s > 0) slots = s;
+        return (qtyPer, slots);
     }
 
     private static IEnumerable<InventoryEntry> DistinctItems(IEnumerable<InventoryEntry> entries)
@@ -415,16 +435,19 @@ public sealed class ListTab
             ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp |
             ImGuiTableFlags.NoSavedSettings;
 
-        if (!ImGui.BeginTable($"##list-table-{sourceKey}", isRetainerSource ? 6 : 4, flags)) return;
+        // retainer source: Item, Owned, Listed, MaxStack, Price, LotsConfig, Plan = 7
+        // char source: Item, Owned, MaxStack, Price, LotsConfig = 5
+        if (!ImGui.BeginTable($"##list-table-{sourceKey}", isRetainerSource ? 7 : 5, flags)) return;
 
         ImGui.TableSetupColumn(Strings.ColItem, ImGuiTableColumnFlags.WidthStretch, 0.4f);
         ImGui.TableSetupColumn(Strings.ColOwned, ImGuiTableColumnFlags.WidthFixed, 70);
         if (isRetainerSource)
             ImGui.TableSetupColumn(Strings.ColListed, ImGuiTableColumnFlags.WidthFixed, 70);
         ImGui.TableSetupColumn(Strings.ColMaxStack, ImGuiTableColumnFlags.WidthFixed, 80);
-        ImGui.TableSetupColumn(Strings.ColPrice, ImGuiTableColumnFlags.WidthStretch, 0.35f);
+        ImGui.TableSetupColumn(Strings.ColPrice, ImGuiTableColumnFlags.WidthStretch, 0.3f);
+        ImGui.TableSetupColumn(Strings.ColLotsConfig, ImGuiTableColumnFlags.WidthFixed, 140);
         if (isRetainerSource)
-            ImGui.TableSetupColumn(Strings.ColPlan, ImGuiTableColumnFlags.WidthStretch, 0.3f);
+            ImGui.TableSetupColumn(Strings.ColPlan, ImGuiTableColumnFlags.WidthStretch, 0.25f);
         ImGui.TableHeadersRow();
 
         foreach (var r in rows)
@@ -449,6 +472,9 @@ public sealed class ListTab
             ImGui.TableNextColumn();
             DrawPriceCell(sourceKey, r);
 
+            ImGui.TableNextColumn();
+            DrawLotsCell(sourceKey, r);
+
             if (isRetainerSource)
             {
                 ImGui.TableNextColumn();
@@ -457,6 +483,32 @@ public sealed class ListTab
         }
 
         ImGui.EndTable();
+    }
+
+    /// <summary>個数 × 枠数 のセル: 2 つの InputInt を横並び。0 = auto / 全枠埋め。</summary>
+    private void DrawLotsCell(string sourceKey, Row r)
+    {
+        var key = MakePriceKey(sourceKey, r.ItemId, r.IsHQ);
+        var qty = editedQtyPer.GetValueOrDefault(key, 0);
+        var slots = editedSlots.GetValueOrDefault(key, 0);
+
+        ImGui.SetNextItemWidth(50);
+        if (ImGui.InputInt($"##qty-{key}", ref qty, 0))
+        {
+            if (qty < 0) qty = 0;
+            if (qty > r.MaxStack) qty = r.MaxStack;
+            editedQtyPer[key] = qty;
+        }
+        ImGui.SameLine(0, 4);
+        ImGui.TextUnformatted("x");
+        ImGui.SameLine(0, 4);
+        ImGui.SetNextItemWidth(50);
+        if (ImGui.InputInt($"##slots-{key}", ref slots, 0))
+        {
+            if (slots < 0) slots = 0;
+            if (slots > Planner.MaxListingSlots) slots = Planner.MaxListingSlots;
+            editedSlots[key] = slots;
+        }
     }
 
     private void DrawPriceInput(string key)
@@ -551,7 +603,9 @@ public sealed class ListTab
         if (!r.IsListable) { ImGui.TextDisabled(Strings.Unsellable); return; }
 
         if (!configuration.Snapshots.TryGetValue(sourceKey, out var snap)) { ImGui.TextDisabled("—"); return; }
-        var plan = Planner.PlanNewListings(new[] { snap }, r.ItemId, r.IsHQ, price, r.MaxStack);
+        var (qtyPer, slots) = ResolveLots(key);
+        var plan = Planner.PlanNewListings(new[] { snap }, r.ItemId, r.IsHQ, price, r.MaxStack,
+            listingsCap: slots, perListingQty: qtyPer);
         var overflow = Planner.Overflow(new[] { snap }, plan, r.ItemId, r.IsHQ);
         var summary = string.Format(Strings.PlanCount, plan.Count);
         if (overflow > 0)
