@@ -459,7 +459,7 @@ public sealed unsafe class Executor : IDisposable
                         var bit = bc->GetInventorySlot(bi);
                         if (bit != null && bit->ItemId == 0)
                         {
-                            var ret = im->MoveItemSlot(st, (ushort)si, bt, (ushort)bi, false);
+                            var ret = im->MoveItemSlot(st, (ushort)si, bt, (ushort)bi, true);
                             log.Information($"[Restocker] pre-stage {st}#{si}({sit->Quantity}) → {bt}#{bi} ret={ret}");
                             return true;
                         }
@@ -994,7 +994,7 @@ public sealed unsafe class Executor : IDisposable
 
         // 3) 1 saddle slot 丸ごと → char bag 空きスロットへ
         var ret = im->MoveItemSlot(saddleType, (ushort)saddleSlot,
-            bagType, (ushort)bagSlot, false);
+            bagType, (ushort)bagSlot, true);
         log.Information($"[Restocker] stage saddle {saddleType}#{saddleSlot}({saddleQty}) → char {bagType}#{bagSlot} ret={ret}");
         waitingSince = null;
         return true;
