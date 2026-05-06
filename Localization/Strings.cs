@@ -91,12 +91,12 @@ public static class Strings
         "全部行 -1 金币",
         "전체 행에 -1길");
     public static string RepriceMatchLowestTooltip => T(
-        "Open the items on Market Board first so the cache fills.",
-        "事前にマーケットボードで対象アイテムを開いておくと相場が cache に入ります。",
-        "Vorher auf dem Markt öffnen, damit der Cache befüllt wird.",
-        "Ouvrez d'abord sur le marché pour remplir le cache.",
-        "请先在市场上打开物品以填充缓存。",
-        "먼저 마켓에서 아이템을 열어 캐시를 채워주세요.");
+        "Fetches market prices for each listing, then sets the new price. Press Apply afterwards to commit.",
+        "各出品の相場を取得して価格をセットします。完了後に「適用」を押すと反映されます。",
+        "Holt Marktpreise je Posten und setzt den neuen Preis. Danach Anwenden.",
+        "Récupère les prix du marché par mise puis applique. Cliquez ensuite Appliquer.",
+        "依次获取每个挂牌的市场价并设定新价格。完成后按「应用」确认。",
+        "각 등록 항목의 시세를 가져와 새 가격을 설정합니다. 이후 적용을 눌러 반영합니다.");
 
     public static string SettingsUndercutDelta => T(
         "Undercut delta (gil)",
