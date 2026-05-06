@@ -156,9 +156,10 @@ public sealed unsafe class Executor : IDisposable
     }
 
     /// <summary>
-    /// 指定したリテイナーの listings から「(itemId, isHQ) ユニーク × 1 listing slot」を抽出し、
-    /// それぞれを開いて ComparePrices で市場価格を MarketCache に取り込む。
-    /// 価格変更は行わない。完了後 <see cref="OnFetchMarketCompleted"/> を発火する。
+    /// 指定リテイナーの SellList を開いて、画面表示 row 0..N を順番に click → ComparePrices
+    /// → MarketCache 更新 を走らせる。snapshot の slot index は画面 row と一致しないので
+    /// (FFXIV 側のソートで揺れる) 行順に走らせて、dialog の itemName から item id を
+    /// 逆引きして expected を確定する。完了後 <see cref="OnFetchMarketCompleted"/> 発火。
     /// </summary>
     public void StartFetchMarketPricesForRetainer(string retainerKey)
     {
@@ -168,18 +169,19 @@ public sealed unsafe class Executor : IDisposable
             log.Warning($"[Restocker] StartFetchMarketPricesForRetainer: unknown key {retainerKey}");
             return;
         }
-        var seen = new HashSet<(uint, bool)>();
+        // snapshot の listing 数 (= 表示行数) ぶん、画面 row 0..N-1 を click する。
+        // ItemId / IsHQ は dialog open 後に動的に確定するため、ここでは入れない。
         var actions = new List<PlannedAction>();
-        foreach (var l in snap.Listings.OrderBy(l => l.ListingIndex))
+        var rowCount = snap.Listings.Count;
+        for (var row = 0; row < rowCount; row++)
         {
-            if (!seen.Add((l.ItemId, l.IsHQ))) continue;
             actions.Add(new PlannedAction
             {
                 Kind = PlannedActionKind.FetchMarketPrice,
                 RetainerKey = retainerKey,
-                ItemId = l.ItemId,
-                IsHQ = l.IsHQ,
-                ListingIndex = l.ListingIndex,
+                ItemId = 0,           // dialog 開いてから決定
+                IsHQ = false,         // 同上
+                ListingIndex = row,   // 画面 row index
             });
         }
         if (actions.Count == 0) { log.Info("[Restocker] no items to fetch"); return; }
@@ -660,6 +662,55 @@ public sealed unsafe class Executor : IDisposable
         Stop($"unknown action kind {action.Kind}");
     }
 
+    /// <summary>
+    /// RetainerSell ダイアログの ItemName ノードのテキストから item id を逆引き。
+    /// HQ アイコン付きなら HQ 判定、戻り値の itemId が 0 ならマッチ無し。
+    /// 起動時に Lumina の Item シートを name → id でメモ化する。
+    /// </summary>
+    private static Dictionary<string, uint>? itemNameToIdCache;
+
+    private static (uint itemId, bool isHq) ResolveItemFromDialogName(string raw)
+    {
+        if (string.IsNullOrEmpty(raw)) return (0, false);
+
+        // FFXIV の HQ アイコンは Unicode private-use の 
+        var isHq = raw.Contains('');
+        // 表示は "<color>itemName</color>" 系の制御コードを含むことがあるので、
+        // 純粋なアイテム名候補だけを抽出する
+        var sb = new System.Text.StringBuilder(raw.Length);
+        foreach (var c in raw)
+        {
+            if (c < 0x20) continue;                    // 制御
+            if (c >= 0xE000 && c <= 0xF8FF) continue;  // PUA (HQ アイコンなど)
+            if (c == 'H' || c == 'I') { /* keep */ }
+            sb.Append(c);
+        }
+        var stripped = sb.ToString().Trim();
+
+        if (itemNameToIdCache == null)
+        {
+            itemNameToIdCache = new Dictionary<string, uint>();
+            try
+            {
+                var sheet = Plugin.DataManager.GetExcelSheet<Lumina.Excel.Sheets.Item>();
+                foreach (var row in sheet)
+                {
+                    var name = row.Name.ExtractText();
+                    if (string.IsNullOrEmpty(name)) continue;
+                    if (!itemNameToIdCache.ContainsKey(name)) itemNameToIdCache[name] = row.RowId;
+                }
+            }
+            catch { }
+        }
+        if (itemNameToIdCache.TryGetValue(stripped, out var id)) return (id, isHq);
+        // 完全一致が無ければ、cache の name が含まれる長い text から検索 (制御コード残り対策)
+        foreach (var kv in itemNameToIdCache)
+        {
+            if (kv.Key.Length > 1 && raw.Contains(kv.Key)) return (kv.Value, isHq);
+        }
+        return (0, isHq);
+    }
+
     private void ClickListingSlot(int slot)
     {
         var addon = AddonHelper.GetVisible("RetainerSellList");
@@ -1089,23 +1140,29 @@ public sealed unsafe class Executor : IDisposable
 
         var act = currentJobActions.Peek();
 
-        // RetainerSell が表示しているアイテム名と action の itemId が一致するか検証。
-        // snapshot stale や server 側の slot 並び替えで開いた dialog のアイテムが
-        // ズレることがあり、そのまま ComparePrices を投げると関係ない検索が走り
-        // server 応答とこちらの期待 itemId が永遠にズレる。
+        // dialog のアイテム名から item id を逆引き。snapshot の slot index は画面 row と
+        // 一致しないため、行を click した結果開いた dialog の表示アイテムを真として扱う。
         var sell = (AddonRetainerSell*)addon;
         var dialogName = sell->ItemName != null ? sell->ItemName->NodeText.ToString() ?? string.Empty : string.Empty;
-        var sheet = Plugin.DataManager.GetExcelSheet<Lumina.Excel.Sheets.Item>();
-        var expectedName = sheet.TryGetRow(act.ItemId, out var row) ? row.Name.ExtractText() ?? string.Empty : string.Empty;
-        // dialogName 側に HQ アイコン () が含まれることがあるので、含み判定する
-        if (!string.IsNullOrEmpty(expectedName) && !dialogName.Contains(expectedName))
+        var (resolvedItemId, resolvedIsHq) = ResolveItemFromDialogName(dialogName);
+        if (resolvedItemId == 0)
         {
-            log.Warning($"[Restocker] dialog/snapshot mismatch: dialog='{dialogName}' expected='{expectedName}' (item={act.ItemId} slot={act.ListingIndex}); proceeding anyway");
+            log.Warning($"[Restocker] could not resolve item id from dialog name '{dialogName}'; skipping");
+            Callback.Fire(addon, true, -1);
+            currentJobActions.Dequeue();
+            CompletedActions++;
+            Plugin.Instance?.ClearMarketWatcherExpected();
+            State = ExecutionState.FetchAwaitingSellListAfter;
+            Throttle();
+            return;
         }
-
+        act.ItemId = resolvedItemId;
+        act.IsHQ = resolvedIsHq;
+        Plugin.Instance?.SetMarketWatcherExpected(resolvedItemId, resolvedIsHq);
+        // dialogName 側に HQ アイコン () が含まれることがあるので、含み判定する
         // ComparePrices を click。AddonRetainerSell の event id 4
         Callback.Fire(addon, true, 4);
-        log.Information($"[Restocker] clicked ComparePrices for item={act.ItemId} hq={act.IsHQ} (slot={act.ListingIndex}) dialog='{dialogName}'");
+        log.Information($"[Restocker] clicked ComparePrices for item={resolvedItemId} hq={resolvedIsHq} (row={act.ListingIndex}) dialog='{dialogName}'");
         State = ExecutionState.FetchAwaitingMarketData;
         waitingSince = DateTime.UtcNow;
         Throttle();
