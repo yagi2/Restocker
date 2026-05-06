@@ -210,6 +210,8 @@ public sealed class RepriceTab
         var applied = 0;
         var sheet = Plugin.DataManager.GetExcelSheet<Item>();
 
+        Plugin.Log.Information($"[Restocker] reprice apply: retainer={snap.RetainerName} listings={snap.Listings.Count}");
+
         foreach (var listing in snap.Listings)
         {
             var name = sheet.TryGetRow(listing.ItemId, out var row) ? row.Name.ExtractText() : $"#{listing.ItemId}";
@@ -220,12 +222,20 @@ public sealed class RepriceTab
             if (!marketCache.HasData(listing.ItemId, listing.IsHQ))
             {
                 missing.Add((listing.ItemId, listing.IsHQ, name));
+                Plugin.Log.Information($"  slot={listing.ListingIndex} item={listing.ItemId} hq={listing.IsHQ} name='{name}' MISS (no cache)");
                 continue;
             }
             var lowest = marketCache.GetLowest(listing.ItemId, listing.IsHQ);
-            if (lowest <= 1) continue;
-            editedPrice[$"{snap.Key}#{listing.ListingIndex}"] = lowest - 1;
+            var current = listing.UnitPrice;
+            if (lowest <= 1)
+            {
+                Plugin.Log.Information($"  slot={listing.ListingIndex} item={listing.ItemId} hq={listing.IsHQ} name='{name}' lowest={lowest} (skipped, too low)");
+                continue;
+            }
+            var newPrice = lowest - 1;
+            editedPrice[$"{snap.Key}#{listing.ListingIndex}"] = newPrice;
             applied++;
+            Plugin.Log.Information($"  slot={listing.ListingIndex} item={listing.ItemId} hq={listing.IsHQ} name='{name}' current={current:N0} lowest={lowest:N0} -> new={newPrice:N0}");
         }
 
         if (missing.Count == 0)
