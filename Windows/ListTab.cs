@@ -487,30 +487,60 @@ public sealed class ListTab
         DrawPriceQuickButtons(sourceKey, r.ItemId, r.IsHQ);
     }
 
-    /// <summary>1 行ぶんの「最安値」/「-1ギル」クイックボタン。</summary>
+    /// <summary>
+    /// 1 行ぶんの「最安値」/「-1ギル」クイックボタン。
+    /// MarketCache にデータがあればそのまま使い、無ければ Executor に
+    /// インベントリ経由 (新規出品ダイアログ → ComparePrices) で fetch を依頼。
+    /// fetch 完了時に OnFetchMarketCompleted で価格を反映する。
+    /// </summary>
     private void DrawPriceQuickButtons(string sourceKey, uint itemId, bool isHQ)
     {
+        var key = MakePriceKey(sourceKey, itemId, isHQ);
         var cached = marketCache.HasData(itemId, isHQ);
-        if (!cached) ImGui.BeginDisabled();
+        var busy = executor.IsRunning;
+
+        if (busy) ImGui.BeginDisabled();
         if (ImGui.SmallButton($"{Strings.QuickLowest}##q-{sourceKey}-{itemId}-{(isHQ ? 1 : 0)}"))
         {
-            var lowest = marketCache.GetLowest(itemId, isHQ);
-            if (lowest > 0)
-                editedPrice[MakePriceKey(sourceKey, itemId, isHQ)] = lowest;
+            ApplyOrFetchAndApply(itemId, isHQ, key, offset: 0);
         }
         ImGui.SameLine(0, 4);
         if (ImGui.SmallButton($"{Strings.QuickLowestMinus1}##q1-{sourceKey}-{itemId}-{(isHQ ? 1 : 0)}"))
         {
-            var lowest = marketCache.GetLowest(itemId, isHQ);
-            if (lowest > 1)
-                editedPrice[MakePriceKey(sourceKey, itemId, isHQ)] = lowest - 1;
+            ApplyOrFetchAndApply(itemId, isHQ, key, offset: -1);
         }
-        if (!cached)
+        if (busy) ImGui.EndDisabled();
+        else if (!cached)
         {
-            ImGui.EndDisabled();
-            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            // disabled じゃなく押せる (fetch 発火する) ので tooltip だけ
+            if (ImGui.IsItemHovered())
                 ImGui.SetTooltip(Strings.MarketDataNeeded);
         }
+    }
+
+    private void ApplyOrFetchAndApply(uint itemId, bool isHQ, string priceKey, long offset)
+    {
+        if (marketCache.HasData(itemId, isHQ))
+        {
+            var lowest = marketCache.GetLowest(itemId, isHQ);
+            if (lowest > 0)
+            {
+                var p = lowest + offset;
+                if (p <= 0) p = 1;
+                editedPrice[priceKey] = p;
+            }
+            return;
+        }
+        // fetch via inventory dialog → on completion apply
+        executor.OnFetchMarketCompleted = () =>
+        {
+            var l = marketCache.GetLowest(itemId, isHQ);
+            if (l <= 0) return;
+            var p = l + offset;
+            if (p <= 0) p = 1;
+            editedPrice[priceKey] = p;
+        };
+        executor.StartFetchMarketPriceForItem(itemId, isHQ);
     }
 
     private void DrawPlanCell(string sourceKey, Row r)

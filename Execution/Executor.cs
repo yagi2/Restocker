@@ -81,6 +81,38 @@ public sealed unsafe class Executor : IDisposable
     }
 
     /// <summary>
+    /// 単一アイテムの市場相場をインベントリ経由で取得する (ListTab 用)。
+    /// AgentInventoryContext で「マーケットに出品」ダイアログを開き、
+    /// ComparePrices ボタンを叩いて ItemSearchResult を出し、
+    /// MarketWatcher が拾ったところで close。
+    /// </summary>
+    public void StartFetchMarketPriceForItem(uint itemId, bool isHQ)
+    {
+        if (IsRunning) { log.Warning("[Restocker] Executor.Start while already running"); return; }
+        var rm = RetainerManager.Instance();
+        var activeName = rm != null && rm->IsReady && rm->GetActiveRetainer() != null
+            ? rm->GetActiveRetainer()->NameString
+            : string.Empty;
+        if (string.IsNullOrEmpty(activeName))
+        {
+            log.Warning("[Restocker] StartFetchMarketPriceForItem: no active retainer");
+            return;
+        }
+        var actions = new List<PlannedAction>
+        {
+            new PlannedAction
+            {
+                Kind = PlannedActionKind.FetchMarketPriceViaInventory,
+                ItemId = itemId,
+                IsHQ = isHQ,
+            },
+        };
+        jobs.Clear();
+        jobs.Add(new RetainerVisitJob { RetainerName = activeName, Actions = actions });
+        Begin(ExecutionMode.ApplyActions);
+    }
+
+    /// <summary>
     /// 指定したリテイナーの listings から「(itemId, isHQ) ユニーク × 1 listing slot」を抽出し、
     /// それぞれを開いて ComparePrices で市場価格を MarketCache に取り込む。
     /// 価格変更は行わない。完了後 <see cref="OnFetchMarketCompleted"/> を発火する。
@@ -372,6 +404,18 @@ public sealed unsafe class Executor : IDisposable
                 waitingSince = null;
                 Throttle();
                 return;
+            case PlannedActionKind.FetchMarketPriceViaInventory:
+                if (!OpenContextMenuForAnySlot(action.ItemId, action.IsHQ))
+                {
+                    log.Warning($"[Restocker] FetchMarketPriceViaInventory: no inventory slot has item={action.ItemId} hq={action.IsHQ}");
+                    currentJobActions.Dequeue();
+                    Throttle();
+                    return;
+                }
+                State = ExecutionState.AwaitingContextMenu;
+                waitingSince = null;
+                Throttle();
+                return;
             case PlannedActionKind.Reprice:
                 // InventoryManager.SetRetainerMarketPrice で直接価格を書き換え。
                 // RetainerSell ダイアログを開かないので桁違いに速い。
@@ -458,8 +502,57 @@ public sealed unsafe class Executor : IDisposable
     private void TickClickingPutUpForSale()
     {
         if (!ContextMenuHelper.ClickEntry(AddonText.IsPutUpForSaleEntry)) return;
-        State = ExecutionState.AwaitingSellDialog;
+        // FetchMarketPriceViaInventory なら ComparePrices 経路へ、
+        // 通常の NewListing なら価格/数量入力 → Confirm 経路へ。
+        var nextKind = currentJobActions.Count > 0 ? currentJobActions.Peek().Kind : PlannedActionKind.NewListing;
+        State = nextKind == PlannedActionKind.FetchMarketPriceViaInventory
+            ? ExecutionState.FetchAwaitingSellDialog
+            : ExecutionState.AwaitingSellDialog;
         Throttle();
+    }
+
+    /// <summary>
+    /// 任意のインベントリ (retainer pages / char bag / saddle) に該当アイテムを持つ
+    /// slot を 1 つ見つけ、AgentInventoryContext.OpenForItemSlot で右クリック相当を発火。
+    /// 主に FetchMarketPriceViaInventory 用 (NewListing は SourceKey 制約があるので別関数)。
+    /// </summary>
+    private bool OpenContextMenuForAnySlot(uint itemId, bool isHQ)
+    {
+        var im = FFXIVClientStructs.FFXIV.Client.Game.InventoryManager.Instance();
+        if (im == null) return false;
+        var sellListAddon = AddonHelper.GetVisible("RetainerSellList");
+        var addonId = sellListAddon != null ? sellListAddon->Id : (ushort)0;
+
+        InventoryType[] all =
+        {
+            InventoryType.RetainerPage1, InventoryType.RetainerPage2, InventoryType.RetainerPage3,
+            InventoryType.RetainerPage4, InventoryType.RetainerPage5, InventoryType.RetainerPage6,
+            InventoryType.RetainerPage7,
+            InventoryType.Inventory1, InventoryType.Inventory2,
+            InventoryType.Inventory3, InventoryType.Inventory4,
+            InventoryType.SaddleBag1, InventoryType.SaddleBag2,
+            InventoryType.PremiumSaddleBag1, InventoryType.PremiumSaddleBag2,
+        };
+        foreach (var t in all)
+        {
+            var c = im->GetInventoryContainer(t);
+            if (c == null) continue;
+            for (var i = 0; i < c->Size; i++)
+            {
+                var item = c->GetInventorySlot(i);
+                if (item == null || item->ItemId != itemId) continue;
+                var hq = (item->Flags & FFXIVClientStructs.FFXIV.Client.Game.InventoryItem.ItemFlags.HighQuality) != 0;
+                if (hq != isHQ) continue;
+                if (item->Quantity == 0) continue;
+
+                var agent = FFXIVClientStructs.FFXIV.Client.UI.Agent.AgentInventoryContext.Instance();
+                if (agent == null) return false;
+                agent->OpenForItemSlot(t, i, 0, addonId);
+                log.Debug($"[Restocker] open context for item={itemId} via {t}#{i}");
+                return true;
+            }
+        }
+        return false;
     }
 
     /// <summary>
