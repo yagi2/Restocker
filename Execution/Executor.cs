@@ -66,6 +66,10 @@ public sealed unsafe class Executor : IDisposable
     /// <summary>1 fetch ジョブ中に既に取得済みの (itemId, isHq)。同じアイテムを 2 度
     /// 引かないために使う。Begin でクリアされる。</summary>
     private readonly HashSet<(uint, bool)> fetchedThisSession = new();
+
+    /// <summary>fetch ジョブ開始時の snapshot 上の unique item 数。これに到達したら
+    /// 残り actions が同 item の重複なので一括破棄して終了する。</summary>
+    private int totalUniqueFetchTargets;
     private static readonly TimeSpan SaddleSettleAfterStage = TimeSpan.FromSeconds(3);
 
     private DateTime nextStepNoEarlierThan = DateTime.MinValue;
@@ -122,12 +126,18 @@ public sealed unsafe class Executor : IDisposable
             {
                 Kind = PlannedActionKind.FetchMarketPrice,
                 RetainerKey = retainerKey,
-                ItemId = 0,           // dialog 開いてから決定
-                IsHQ = false,         // 同上
-                ListingIndex = row,   // 画面 row index
+                ItemId = 0,
+                IsHQ = false,
+                ListingIndex = row,
             });
         }
         if (actions.Count == 0) { log.Info("[Restocker] no items to fetch"); return; }
+
+        // snapshot から unique (item, hq) 数を見積もる。fetchedThisSession.Count が
+        // これに達した時点で残り actions は重複なので drain して即終了する。
+        var uniqueTargets = new HashSet<(uint, bool)>();
+        foreach (var l in snap.Listings) uniqueTargets.Add((l.ItemId, l.IsHQ));
+        totalUniqueFetchTargets = uniqueTargets.Count;
         jobs.Clear();
         jobs.Add(new RetainerVisitJob { RetainerName = snap.RetainerName, Actions = actions });
         Begin(ExecutionMode.ApplyActions);
@@ -166,6 +176,8 @@ public sealed unsafe class Executor : IDisposable
         waitingSince = null;
         usedMarketSlots.Clear();
         fetchedThisSession.Clear();
+        // totalUniqueFetchTargets は StartFetchMarketPricesForRetainer で設定されるので
+        // ここでは触らない。他の Begin パスでは 0 のままで drain 判定が無効になる。
         if (jobs.Count == 0) { State = ExecutionState.Done; return; }
 
         // smart-start: 既に対象リテイナーの SellList を開いている場合は
@@ -1128,6 +1140,22 @@ public sealed unsafe class Executor : IDisposable
         waitingSince = null;
         currentJobActions.Dequeue();
         CompletedActions++;
+
+        // snapshot 上の unique items を全部取り終えたら、残りの actions は同じ item の
+        // 重複でしかない。dialog を開いて閉じる無駄な往復になるので drain して即終了。
+        if (totalUniqueFetchTargets > 0
+            && fetchedThisSession.Count >= totalUniqueFetchTargets
+            && currentJobActions.Count > 0)
+        {
+            var dropped = currentJobActions.Count;
+            log.Information($"[Restocker] all {totalUniqueFetchTargets} unique items fetched; draining {dropped} duplicate row(s)");
+            while (currentJobActions.Count > 0)
+            {
+                currentJobActions.Dequeue();
+                CompletedActions++;
+            }
+        }
+
         if (currentJobActions.Count == 0)
         {
             try { OnFetchMarketCompleted?.Invoke(); }
