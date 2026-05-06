@@ -90,9 +90,17 @@ public static class Strings
         "-1 gil à toutes les lignes",
         "全部行 -1 金币",
         "전체 행에 -1길");
+    public static string RepriceMatchLowestTooltip => T(
+        "Open the items on Market Board first so the cache fills.",
+        "事前にマーケットボードで対象アイテムを開いておくと相場が cache に入ります。",
+        "Vorher auf dem Markt öffnen, damit der Cache befüllt wird.",
+        "Ouvrez d'abord sur le marché pour remplir le cache.",
+        "请先在市场上打开物品以填充缓存。",
+        "먼저 마켓에서 아이템을 열어 캐시를 채워주세요.");
+
     public static string RepriceMatchLowestThisRetainer => T(
-        "Match lowest -1g (fetch)",
-        "最安値 -1ギルで価格更新（相場取得）",
+        "Match lowest -1g for all items",
+        "全てのアイテムを最安値 -1ギルで価格更新",
         "-1 Gil (nur dieser Gehilfe)",
         "-1 gil (cet intendant)",
         "本雇员 -1 金币",

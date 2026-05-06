@@ -142,14 +142,17 @@ public sealed class RepriceTab
             var header = string.Format(Strings.RetainerHeader, snap.RetainerName, filteredListings.Count, FreshnessSuffix(snap));
             if (!DrawCollapsingHeader("reprice-" + snap.Key, header)) continue;
 
-            // このリテイナー専用の -1 ギル ボタン
-            // クリックで「ComparePrices で市場取得 → 完了後に -1ギル を適用」を自動実行
+            // 最安値 -1ギル を MarketCache から適用。
+            // 自動 fetch (listing slot click → ComparePrices) は ECommons の Callback
+            // シグネチャが現環境で listing slot click として認識されず止まる問題があり、
+            // 一旦 cache 経由のみ。事前にマーケットボードで対象アイテムを開いておけば
+            // MarketWatcher が cache に相場を吸い上げる。
             if (ImGui.SmallButton(Strings.RepriceMatchLowestThisRetainer + "##matchlowest-" + snap.Key))
             {
-                var capturedSnap = snap;
-                executor.OnFetchMarketCompleted = () => ApplyMatchLowestForRetainer(capturedSnap);
-                executor.StartFetchMarketPricesForRetainer(snap.Key);
+                ApplyMatchLowestForRetainer(snap);
             }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(Strings.RepriceMatchLowestTooltip);
 
             DrawRetainerListings(snap, filteredListings);
         }
