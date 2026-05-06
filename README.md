@@ -1,5 +1,7 @@
 # Restocker
 
+<p align="center"><img src="images/icon.png" alt="Restocker icon" width="160"></p>
+
 A Dalamud plugin for FFXIV that gives you a **cross-retainer market workbench**:
 
 - See every listing across every retainer in **one aggregated table**
@@ -35,7 +37,7 @@ Every time you summon a retainer and the sell list (`RetainerSellList`) updates,
 
 …and saves them to your plugin config keyed by `(character, retainer)`. The next time you open the bell — even without summoning anyone — the cross-retainer view shows you everything you saw last time.
 
-> The "current asking price" of each listing is not exposed in `InventoryItem` on Dalamud API 15, so the **Reprice** tab shows `unknown` for prices on retainers you haven't visited recently. Re-summoning the retainer and opening the sell list will refresh.
+> The "current asking price" of each listing is not exposed by Dalamud's `InventoryItem`, so the **Reprice** tab shows `unknown` for prices on retainers you haven't visited recently. Re-summoning the retainer and opening the sell list will refresh.
 
 ### The Reprice tab
 
