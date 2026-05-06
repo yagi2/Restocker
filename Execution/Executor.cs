@@ -281,8 +281,12 @@ public sealed unsafe class Executor : IDisposable
         if (!AddonHelper.IsOpen("SelectString")) { waitingSince = null; return; }
         if (waitingSince == null) waitingSince = DateTime.UtcNow;
 
-        if (SelectStringHelper.HasEntry(AddonText.IsHaveRetainerSellItemsEntry))
+        var idx = SelectStringHelper.FindEntryIndex(AddonText.IsHaveRetainerSellItemsEntry);
+        if (idx >= 0)
         {
+            var entries = SelectStringHelper.EnumerateEntries();
+            var matched = idx < entries.Count ? entries[idx] : "?";
+            log.Debug($"[Restocker] SelectString matched [{idx}] = '{matched}' (all: {string.Join(" | ", entries)})");
             waitingSince = null;
             State = ExecutionState.OpeningSellList;
             Throttle();
@@ -433,22 +437,33 @@ public sealed unsafe class Executor : IDisposable
                     return;
                 }
             case PlannedActionKind.NewListing:
-                // 新規出品は **必ずダイアログ経由** にする。
-                // MoveToRetainerMarket 直叩きは server 側で実際にコミットされない
-                // ケース (特に saddle source) があるため、信頼性のため
-                // FFXIV ネイティブの flow (右クリック → 'マーケットに出品' → RetainerSell → Confirm)
-                // を踏む。
-                if (!OpenContextMenuForAnySlot(action.ItemId, action.IsHQ))
+                // 新規出品は MoveToRetainerMarket の **直接 API** で 1 ショットで処理する。
+                // ContextMenu 経由は「マーケットに出品」エントリが現在の FFXIV 環境で
+                // 出ない条件があり信頼できない (確認: 7.x で表示されないケースあり)。
+                // 直接 API なら RetainerSellList が開いた状態 + リテイナー召喚中で
+                // server 側でアイテム移動と出品が同時にコミットされる。
                 {
-                    log.Warning($"[Restocker] NewListing skip (no source slot): item={action.ItemId} hq={action.IsHQ}");
+                    var sellList = AddonHelper.GetVisible("RetainerSellList");
+                    log.Debug($"[Restocker] NewListing: RetainerSellList visible={sellList != null}, item={action.ItemId} hq={action.IsHQ} qty={action.Quantity} price={action.UnitPrice} src={action.SourceKey}");
+                    if (sellList == null)
+                    {
+                        log.Warning("[Restocker] NewListing: RetainerSellList is not open, cannot list");
+                        currentJobActions.Dequeue();
+                        Throttle();
+                        return;
+                    }
+                    if (!ExecuteDirectListing(action))
+                    {
+                        log.Warning($"[Restocker] NewListing skip (direct listing failed): item={action.ItemId} hq={action.IsHQ}");
+                        currentJobActions.Dequeue();
+                        Throttle();
+                        return;
+                    }
+                    CompletedActions++;
                     currentJobActions.Dequeue();
                     Throttle();
                     return;
                 }
-                State = ExecutionState.AwaitingContextMenu;
-                waitingSince = null;
-                Throttle();
-                return;
         }
         Stop($"unknown action kind {action.Kind}");
     }
@@ -584,6 +599,17 @@ public sealed unsafe class Executor : IDisposable
         var im = FFXIVClientStructs.FFXIV.Client.Game.InventoryManager.Instance();
         if (im == null) return false;
 
+        if (action.Quantity <= 0)
+        {
+            log.Warning($"[Restocker] ExecuteDirectListing: quantity={action.Quantity} invalid, skipping");
+            return false;
+        }
+        if (action.UnitPrice <= 0)
+        {
+            log.Warning($"[Restocker] ExecuteDirectListing: unitPrice={action.UnitPrice} invalid, skipping (set price first)");
+            return false;
+        }
+
         // 出品先の RetainerMarket で空きスロットを探す。
         // usedMarketSlots に入っているスロットは「ついさっき使った」のでサーバ反映前
         // でもターゲットしないことで swap 動作を防ぐ。
@@ -614,13 +640,14 @@ public sealed unsafe class Executor : IDisposable
                 if (hq != action.IsHQ) continue;
                 if (item->Quantity < action.Quantity) continue;
 
+                var price = (uint)Math.Min(action.UnitPrice, uint.MaxValue);
                 im->MoveToRetainerMarket(
                     t, (ushort)i,
                     InventoryType.RetainerMarket, (ushort)dstSlot,
                     (uint)action.Quantity,
-                    (uint)Math.Min(action.UnitPrice, uint.MaxValue));
+                    price);
                 usedMarketSlots.Add(dstSlot);
-                log.Information($"[Restocker] listed src={t}#{i}({item->Quantity}) -> market#{dstSlot} qty={action.Quantity} price={action.UnitPrice}");
+                log.Information($"[Restocker] listed src={t}#{i}(qty {item->Quantity}) -> market#{dstSlot} qty={action.Quantity} price={price}");
                 return true;
             }
         }
