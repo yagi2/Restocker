@@ -47,11 +47,4 @@ public enum PlannedActionKind
     /// マーケット相場を取得しキャッシュに入れる。価格変更は行わない。
     /// </summary>
     FetchMarketPrice,
-
-    /// <summary>
-    /// インベントリアイテムから AgentInventoryContext で「マーケットに出品」
-    /// ダイアログを開き、ComparePrices で相場をキャッシュ。出品はせずキャンセル。
-    /// 新規出品タブ用。
-    /// </summary>
-    FetchMarketPriceViaInventory,
 }
