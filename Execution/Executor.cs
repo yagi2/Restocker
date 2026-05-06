@@ -452,6 +452,24 @@ public sealed unsafe class Executor : IDisposable
                         Throttle();
                         return;
                     }
+
+                    // saddle ソース: MoveToRetainerMarket は saddle 直接読みできないので
+                    // char bag に staging してから出品する
+                    if (action.SourceKey.EndsWith(".saddle") &&
+                        !HasItemInCharBag(action.ItemId, action.IsHQ, action.Quantity))
+                    {
+                        if (!TryStageSaddleToCharBag(action))
+                        {
+                            log.Warning($"[Restocker] saddle staging failed for item={action.ItemId} hq={action.IsHQ}");
+                            currentJobActions.Dequeue();
+                            Throttle();
+                            return;
+                        }
+                        State = ExecutionState.AwaitingSaddleMove;
+                        Throttle();
+                        return;
+                    }
+
                     if (!ExecuteDirectListing(action))
                     {
                         log.Warning($"[Restocker] NewListing skip (direct listing failed): item={action.ItemId} hq={action.IsHQ}");
@@ -743,6 +761,27 @@ public sealed unsafe class Executor : IDisposable
         InventoryType.Inventory1, InventoryType.Inventory2,
         InventoryType.Inventory3, InventoryType.Inventory4,
     };
+
+    /// <summary>キャラバッグに該当アイテムが minQuantity 以上入った slot があるか。</summary>
+    private bool HasItemInCharBag(uint itemId, bool isHQ, int minQuantity)
+    {
+        var im = InventoryManager.Instance();
+        if (im == null) return false;
+        foreach (var t in CharBagContainers)
+        {
+            var c = im->GetInventoryContainer(t);
+            if (c == null) continue;
+            for (var i = 0; i < c->Size; i++)
+            {
+                var item = c->GetInventorySlot(i);
+                if (item == null || item->ItemId != itemId) continue;
+                var hq = (item->Flags & InventoryItem.ItemFlags.HighQuality) != 0;
+                if (hq != isHQ) continue;
+                if (item->Quantity >= minQuantity) return true;
+            }
+        }
+        return false;
+    }
 
     /// <summary>
     /// サドル → キャラバッグへ **1 action ぶんだけ** スレッディングする。
