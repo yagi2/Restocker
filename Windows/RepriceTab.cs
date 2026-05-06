@@ -142,14 +142,16 @@ public sealed class RepriceTab
             var header = string.Format(Strings.RetainerHeader, snap.RetainerName, filteredListings.Count, FreshnessSuffix(snap));
             if (!DrawCollapsingHeader("reprice-" + snap.Key, header)) continue;
 
-            // 最安値 -1ギル を MarketCache から適用。
-            // 自動 fetch (listing slot click → ComparePrices) は ECommons の Callback
-            // シグネチャが現環境で listing slot click として認識されず止まる問題があり、
-            // 一旦 cache 経由のみ。事前にマーケットボードで対象アイテムを開いておけば
-            // MarketWatcher が cache に相場を吸い上げる。
+            // 自動 fetch + 最安値 -1ギル 適用。Dagobert の Callback シグネチャ
+            // (case=0, itemIndex=slot, 1) で listing slot click が確実に発火するように
+            // なったので、Restocker から各 listing → RetainerSell → ComparePrices →
+            // ItemSearchResult → MarketCache 更新を順に走らせる。完了後に
+            // ApplyMatchLowestForRetainer で editedPrice に -1ギル を反映。
             if (ImGui.SmallButton(Strings.RepriceMatchLowestThisRetainer + "##matchlowest-" + snap.Key))
             {
-                ApplyMatchLowestForRetainer(snap);
+                var capturedSnap = snap;
+                executor.OnFetchMarketCompleted = () => ApplyMatchLowestForRetainer(capturedSnap);
+                executor.StartFetchMarketPricesForRetainer(snap.Key);
             }
             if (ImGui.IsItemHovered())
                 ImGui.SetTooltip(Strings.RepriceMatchLowestTooltip);

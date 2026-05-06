@@ -660,9 +660,9 @@ public sealed unsafe class Executor : IDisposable
     {
         var addon = AddonHelper.GetVisible("RetainerSellList");
         if (addon == null) { Stop("RetainerSellList not visible at click slot"); return; }
-        // ECommons 流: case=0, slot は **int** (= AtkValueType.Int) で送る。
-        // `(uint)slot` 経由だと UInt 型になり addon 側の case 解釈にハマらないことがある。
-        Callback.Fire(addon, true, 0, slot);
+        // RetainerSellList の listing 行 click は 3 引数 (case, slot, 1)。
+        // 第 3 引数のフラグが無いと addon 側で row click として解釈されず無視される。
+        Callback.Fire(addon, true, 0, slot, 1);
         log.Information($"[Restocker] click listing slot {slot} on RetainerSellList");
     }
 
