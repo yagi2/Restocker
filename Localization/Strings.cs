@@ -91,8 +91,8 @@ public static class Strings
         "全部行 -1 金币",
         "전체 행에 -1길");
     public static string RepriceMatchLowestThisRetainer => T(
-        "-1 gil (this retainer)",
-        "このリテイナーに -1ギル",
+        "Match lowest -1g (fetch)",
+        "最安値 -1ギルで価格更新（相場取得）",
         "-1 Gil (nur dieser Gehilfe)",
         "-1 gil (cet intendant)",
         "本雇员 -1 金币",

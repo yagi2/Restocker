@@ -59,6 +59,9 @@ public sealed unsafe class Executor : IDisposable
     /// <summary>PreStagingSaddle 用: 最後の saddle slot 移動を発火した時刻。
     /// 最終 staging からの settle 時間を保証するため。</summary>
     private DateTime? lastStageAt;
+
+    /// <summary>FetchAwaitingSellDialog で listing slot click を再送した記録。</summary>
+    private bool fetchSlotClickRetried;
     private static readonly TimeSpan SaddleSettleAfterStage = TimeSpan.FromSeconds(3);
 
     private DateTime nextStepNoEarlierThan = DateTime.MinValue;
@@ -657,9 +660,9 @@ public sealed unsafe class Executor : IDisposable
     {
         var addon = AddonHelper.GetVisible("RetainerSellList");
         if (addon == null) { Stop("RetainerSellList not visible at click slot"); return; }
-        // RetainerSellList の listing クリック: Callback.Fire(addon, true, 0, slot)
-        // （ECommons の AddonRetainerSellList wrapper に準ずる）
-        Callback.Fire(addon, true, 0, (uint)slot);
+        // ECommons 流: case=0, slot は **int** (= AtkValueType.Int) で送る。
+        // `(uint)slot` 経由だと UInt 型になり addon 側の case 解釈にハマらないことがある。
+        Callback.Fire(addon, true, 0, slot);
         log.Information($"[Restocker] click listing slot {slot} on RetainerSellList");
     }
 
@@ -1036,16 +1039,19 @@ public sealed unsafe class Executor : IDisposable
         var addon = AddonHelper.GetVisible("RetainerSell");
         if (addon == null)
         {
-            // タイムアウト: listing slot click が反映されず RetainerSell が開かない
-            // ケースの保険。SellList でフォーカスが外れているとクリックが効かないことが
-            // あるため、再 click を 1 回だけ試みた上でダメなら諦めて次の action へ進む。
-            if (waitingSince == null) waitingSince = DateTime.UtcNow;
+            if (waitingSince == null)
+            {
+                waitingSince = DateTime.UtcNow;
+                fetchSlotClickRetried = false;
+            }
             var elapsed = DateTime.UtcNow - waitingSince.Value;
-            if (elapsed > TimeSpan.FromSeconds(2.5) && elapsed < TimeSpan.FromSeconds(2.6))
+            // 2.5s 経って開いていなければ 1 回だけ click 再送
+            if (!fetchSlotClickRetried && elapsed > TimeSpan.FromSeconds(2.5))
             {
                 var action = currentJobActions.Peek();
-                log.Warning($"[Restocker] RetainerSell did not open within 2.5s after slot click; retrying click on slot {action.ListingIndex}");
+                log.Warning($"[Restocker] RetainerSell did not open within 2.5s; retrying click on slot {action.ListingIndex}");
                 ClickListingSlot(action.ListingIndex);
+                fetchSlotClickRetried = true;
             }
             if (elapsed > TimeSpan.FromSeconds(6))
             {
@@ -1054,12 +1060,14 @@ public sealed unsafe class Executor : IDisposable
                 currentJobActions.Dequeue();
                 CompletedActions++;
                 waitingSince = null;
+                fetchSlotClickRetried = false;
                 State = ExecutionState.PerformingAction;
                 Throttle();
             }
             return;
         }
         waitingSince = null;
+        fetchSlotClickRetried = false;
 
         var act = currentJobActions.Peek();
         // ComparePrices を click。AddonRetainerSell の event id 4 (Marketbuddy 慣例)
