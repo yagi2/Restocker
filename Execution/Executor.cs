@@ -46,6 +46,9 @@ public sealed unsafe class Executor : IDisposable
     private readonly Queue<int> slotsToReadPrice = new();
     private string? readingSnapshotKey;
     private bool cancelRequested;
+    /// <summary>このリテイナージョブ内で MoveToRetainerMarket に使った market slot。
+    /// サーバ反映ラグで同じスロットを再ターゲットして "swap" 動作になることを防ぐ。</summary>
+    private readonly HashSet<int> usedMarketSlots = new();
 
     private DateTime nextStepNoEarlierThan = DateTime.MinValue;
     private static readonly TimeSpan StepThrottle = TimeSpan.FromMilliseconds(250);
@@ -141,6 +144,7 @@ public sealed unsafe class Executor : IDisposable
         cancelRequested = false;
         StatusMessage = null;
         waitingSince = null;
+        usedMarketSlots.Clear();
         if (jobs.Count == 0) { State = ExecutionState.Done; return; }
 
         // smart-start: 既に対象リテイナーの SellList を開いている場合は
@@ -272,6 +276,9 @@ public sealed unsafe class Executor : IDisposable
     {
         if (!AddonHelper.IsOpen("RetainerSellList")) return;
 
+        // 新しいリテイナーに入ったので市場スロットの占有メモはリセット
+        usedMarketSlots.Clear();
+
         // PostRequestedUpdate で snapshot が拾われるまで一拍待つ
         Wait(SnapshotWait);
 
@@ -382,30 +389,32 @@ public sealed unsafe class Executor : IDisposable
                     return;
                 }
             case PlannedActionKind.NewListing:
-                // 1) リテイナー bag / キャラ bag (staging 済み含む) なら MoveToRetainerMarket 直接
-                if (ExecuteDirectListing(action))
-                {
-                    CompletedActions++;
-                    currentJobActions.Dequeue();
-                    Throttle();
-                    return;
-                }
-                // 2) サドル source の場合は staging が要る
                 {
                     var sourceKey = string.IsNullOrEmpty(action.SourceKey) ? action.RetainerKey : action.SourceKey;
-                    if (sourceKey.EndsWith(".saddle") && TryStageSaddleToCharBag(action))
+                    var isSaddle = sourceKey.EndsWith(".saddle");
+
+                    // 1) char bag / retainer bag を直接探す。saddle source の 1 回目は staging 前なので
+                    //    見つからなくても warning を抑止し、staging path に流す
+                    if (ExecuteDirectListing(action, suppressWarning: isSaddle))
                     {
-                        // staging 発火 → AwaitingSaddleMove で着地を待つ。action は queue 先頭のまま
+                        CompletedActions++;
+                        currentJobActions.Dequeue();
+                        Throttle();
+                        return;
+                    }
+                    // 2) サドル source の場合は staging が要る
+                    if (isSaddle && TryStageSaddleToCharBag(action))
+                    {
                         State = ExecutionState.AwaitingSaddleMove;
                         Throttle();
                         return;
                     }
+                    // 3) どうしても無理 → skip
+                    log.Warning($"[Restocker] NewListing skip (no source slot): item={action.ItemId} src={action.SourceKey}");
+                    currentJobActions.Dequeue();
+                    Throttle();
+                    return;
                 }
-                // 3) どうしても無理 → skip
-                log.Warning($"[Restocker] NewListing skip (no source slot): item={action.ItemId} src={action.SourceKey}");
-                currentJobActions.Dequeue();
-                Throttle();
-                return;
         }
         Stop($"unknown action kind {action.Kind}");
     }
@@ -459,17 +468,22 @@ public sealed unsafe class Executor : IDisposable
     /// 結局は実機の InventoryManager 全体から item を見つけたら即発火する。
     /// (UI のセクション操作ミスや snapshot stale を吸収するため。)
     /// </summary>
-    private bool ExecuteDirectListing(PlannedAction action)
+    private bool ExecuteDirectListing(PlannedAction action) => ExecuteDirectListing(action, suppressWarning: false);
+
+    private bool ExecuteDirectListing(PlannedAction action, bool suppressWarning)
     {
         var im = FFXIVClientStructs.FFXIV.Client.Game.InventoryManager.Instance();
         if (im == null) return false;
 
-        // 出品先の RetainerMarket で空きスロットを探す
+        // 出品先の RetainerMarket で空きスロットを探す。
+        // usedMarketSlots に入っているスロットは「ついさっき使った」のでサーバ反映前
+        // でもターゲットしないことで swap 動作を防ぐ。
         var market = im->GetInventoryContainer(InventoryType.RetainerMarket);
         if (market == null || !market->IsLoaded) return false;
         var dstSlot = -1;
         for (var i = 0; i < market->Size; i++)
         {
+            if (usedMarketSlots.Contains(i)) continue;
             var s = market->GetInventorySlot(i);
             if (s == null) continue;
             if (s->ItemId == 0) { dstSlot = i; break; }
@@ -496,10 +510,13 @@ public sealed unsafe class Executor : IDisposable
                     InventoryType.RetainerMarket, (ushort)dstSlot,
                     (uint)action.Quantity,
                     (uint)Math.Min(action.UnitPrice, uint.MaxValue));
-                log.Debug($"[Restocker] MoveToRetainerMarket src={t}#{i}({item->Quantity}) -> market#{dstSlot} qty={action.Quantity} price={action.UnitPrice}");
+                usedMarketSlots.Add(dstSlot);
+                log.Information($"[Restocker] listed src={t}#{i}({item->Quantity}) -> market#{dstSlot} qty={action.Quantity} price={action.UnitPrice}");
                 return true;
             }
         }
+
+        if (suppressWarning) return false;
 
         // 失敗時は、各 container に該当 item があれば（qty 不足でも）情報を残す
         log.Warning($"[Restocker] no source slot with itemId={action.ItemId} hq={action.IsHQ} qty>={action.Quantity} (src hint={sourceKey}, searched={string.Join(",", candidates)})");
@@ -662,18 +679,14 @@ public sealed unsafe class Executor : IDisposable
         {
             var ret = im->MoveItemSlot(saddleSrcType, (ushort)saddleSrcSlot,
                 charBagType, (ushort)freeCharSlot, false);
-            log.Debug($"[Restocker] stage (whole) saddle={saddleSrcType}#{saddleSrcSlot} → char={charBagType}#{freeCharSlot} ret={ret}");
+            log.Information($"[Restocker] stage saddle slot ({saddleSrcQty}) → char#{freeCharSlot} ret={ret}");
         }
         else
         {
-            // 余剰分が char bag に残らないよう、必要数だけ split
             var split = im->SplitItem(saddleSrcType, (ushort)saddleSrcSlot, action.Quantity);
-            log.Debug($"[Restocker] SplitItem saddle={saddleSrcType}#{saddleSrcSlot} qty={action.Quantity} ret={split}");
-            // 直後の MoveItemSlot で free スロットへ着地させる（SplitItem の挙動として、
-            // src スロットが分かれているはずなので同じ srcSlot を再指定する形にする）
             var ret = im->MoveItemSlot(saddleSrcType, (ushort)saddleSrcSlot,
                 charBagType, (ushort)freeCharSlot, false);
-            log.Debug($"[Restocker] move-after-split → char={charBagType}#{freeCharSlot} ret={ret}");
+            log.Information($"[Restocker] split {action.Quantity} from saddle → char#{freeCharSlot} (split ret={split}, move ret={ret})");
         }
         waitingSince = null;
         return true;

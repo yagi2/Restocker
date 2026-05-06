@@ -25,8 +25,8 @@ public sealed class ListTab
     private readonly Dictionary<string, long> editedPrice = new();
     /// <summary>キャラ所持品セクションごとの「出品先リテイナー key」選択。キーは char source key。</summary>
     private readonly Dictionary<string, string> charTargetRetainer = new();
-    /// <summary>明示的に折りたたんだセクションの id。CollapsingHeader のフレーム間状態保持を奪われる事故を回避。</summary>
-    private readonly HashSet<string> collapsedSections = new();
+    /// <summary>明示的に展開したセクションの id。デフォルトは折りたたみ。</summary>
+    private readonly HashSet<string> expandedSections = new();
 
     public ListTab(Configuration configuration, Executor executor, ConfirmDialog confirmDialog)
     {
@@ -51,19 +51,19 @@ public sealed class ListTab
         ImGui.SameLine();
         if (ImGui.SmallButton(Strings.CollapseAll + "##list-collapse"))
         {
-            foreach (var snap in configuration.Snapshots.Values)
-                collapsedSections.Add("list-" + snap.Key);
-            foreach (var ch in configuration.Characters.Values)
-            {
-                var k = CharacterSnapshot.MakeKey(ch.CharacterContentId);
-                collapsedSections.Add("char-" + k);
-                collapsedSections.Add("saddle-" + k);
-            }
+            expandedSections.Clear();
         }
         ImGui.SameLine();
         if (ImGui.SmallButton(Strings.ExpandAll + "##list-expand"))
         {
-            collapsedSections.Clear();
+            foreach (var snap in configuration.Snapshots.Values)
+                expandedSections.Add("list-" + snap.Key);
+            foreach (var ch in configuration.Characters.Values)
+            {
+                var k = CharacterSnapshot.MakeKey(ch.CharacterContentId);
+                expandedSections.Add("char-" + k);
+                expandedSections.Add("saddle-" + k);
+            }
         }
         ImGui.SameLine();
         ImGui.TextDisabled($"{Strings.HQNQNote} / {Strings.NoTransfer}");
@@ -180,20 +180,16 @@ public sealed class ListTab
         ImGui.EndChild();
     }
 
-    /// <summary>
-    /// 折りたたみ状態を <see cref="collapsedSections"/> で明示管理する CollapsingHeader。
-    /// ImGui のフレーム内ステート（DefaultOpen）に依存しないので、
-    /// 「閉じたのに勝手に展開される」事故が起きない。
-    /// </summary>
+    /// <summary>デフォルト = 折りたたみ。ユーザー操作のみ <see cref="expandedSections"/> に反映。</summary>
     private bool DrawCollapsingHeader(string id, string label)
     {
-        var open = !collapsedSections.Contains(id);
+        var open = expandedSections.Contains(id);
         ImGui.SetNextItemOpen(open, ImGuiCond.Always);
         var nowOpen = ImGui.CollapsingHeader(label + "##" + id);
         if (nowOpen != open)
         {
-            if (nowOpen) collapsedSections.Remove(id);
-            else collapsedSections.Add(id);
+            if (nowOpen) expandedSections.Add(id);
+            else expandedSections.Remove(id);
         }
         return nowOpen;
     }

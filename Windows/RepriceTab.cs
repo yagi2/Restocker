@@ -24,8 +24,8 @@ public sealed class RepriceTab
     /// <summary>編集中の新価格。キーは "{retainerKey}#{listingIndex}"。</summary>
     private readonly Dictionary<string, long> editedPrice = new();
     private string? lastMatchSummary;
-    /// <summary>明示的に折りたたんだリテイナーセクションの key。</summary>
-    private readonly HashSet<string> collapsedSections = new();
+    /// <summary>明示的に展開したリテイナーセクションの key。デフォルトは折りたたみ。</summary>
+    private readonly HashSet<string> expandedSections = new();
 
     public RepriceTab(Configuration configuration, Executor executor, ConfirmDialog confirmDialog, MarketCache marketCache)
     {
@@ -55,13 +55,13 @@ public sealed class RepriceTab
         ImGui.SameLine();
         if (ImGui.SmallButton(Strings.CollapseAll + "##reprice-collapse"))
         {
-            foreach (var snap in configuration.Snapshots.Values)
-                collapsedSections.Add("reprice-" + snap.Key);
+            expandedSections.Clear();
         }
         ImGui.SameLine();
         if (ImGui.SmallButton(Strings.ExpandAll + "##reprice-expand"))
         {
-            collapsedSections.Clear();
+            foreach (var snap in configuration.Snapshots.Values)
+                expandedSections.Add("reprice-" + snap.Key);
         }
         ImGui.SameLine();
         ImGui.TextDisabled(Strings.HQNQNote);
@@ -233,18 +233,18 @@ public sealed class RepriceTab
     }
 
     /// <summary>
-    /// 折りたたみ状態を <see cref="collapsedSections"/> で明示管理する CollapsingHeader。
-    /// ImGui の DefaultOpen が再評価されて勝手に開く事故を回避。
+    /// 折りたたみ状態を <see cref="expandedSections"/> で明示管理する CollapsingHeader。
+    /// デフォルト = 折りたたみ。ユーザーが開いたら expandedSections に追加。
     /// </summary>
     private bool DrawCollapsingHeader(string id, string label)
     {
-        var open = !collapsedSections.Contains(id);
+        var open = expandedSections.Contains(id);
         ImGui.SetNextItemOpen(open, ImGuiCond.Always);
         var nowOpen = ImGui.CollapsingHeader(label + "##" + id);
         if (nowOpen != open)
         {
-            if (nowOpen) collapsedSections.Remove(id);
-            else collapsedSections.Add(id);
+            if (nowOpen) expandedSections.Add(id);
+            else expandedSections.Remove(id);
         }
         return nowOpen;
     }

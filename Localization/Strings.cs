@@ -122,7 +122,7 @@ public static class Strings
     public static string RetainerHeader => T("{0}  ({1} listings, {2})", "{0}  ({1}件 / {2})", "{0}  ({1} Posten, {2})", "{0}  ({1} mises, {2})", "{0}  ({1} 项, {2})", "{0}  ({1}건, {2})");
     public static string RetainerHeaderInventory => T("{0}  ({1} items, {2})", "{0}  ({1}品 / {2})", "{0}  ({1} Artikel, {2})", "{0}  ({1} articles, {2})", "{0}  ({1} 物品, {2})", "{0}  ({1}품, {2})");
     public static string CharacterInventoryHeader => T("Character bag (entrust required)", "キャラ所持品（要 預け入れ）", "Charakter-Tasche (Übergabe nötig)", "Sac du personnage (transfert requis)", "角色背包（需先寄存）", "캐릭터 가방 (위탁 필요)");
-    public static string SaddlebagHeader => T("Saddlebag", "サドルバッグ", "Satteltasche", "Fonte", "马鞍袋", "새들백");
+    public static string SaddlebagHeader => T("Saddlebag", "チョコボかばん", "Satteltasche", "Fonte", "马鞍袋", "새들백");
     public static string CharBagTargetLabel => T("Target retainer", "出品先リテイナー", "Ziel-Gehilfe", "Intendant cible", "上架雇员", "등록 대상 리테이너");
     public static string CharBagPickTarget => T("(pick a target retainer)", "（出品先を選択）", "(Ziel wählen)", "(choisis un intendant)", "（请选择雇员）", "(대상 선택)");
     public static string CharBagNeedRetainerSnapshot => T(
