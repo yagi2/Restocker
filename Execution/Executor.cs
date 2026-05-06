@@ -536,13 +536,16 @@ public sealed unsafe class Executor : IDisposable
         var sellListAddon = AddonHelper.GetVisible("RetainerSellList");
         var addonId = sellListAddon != null ? sellListAddon->Id : (ushort)0;
 
+        // 優先順: キャラバッグ → リテイナーバッグ → サドル
+        // サドルは右クリックで「マーケットに出品」が出ない仕様なので最後の手段。
+        // そもそも本プラグインから預け入れは不要、char bag からそのまま出品できる
         InventoryType[] all =
         {
+            InventoryType.Inventory1, InventoryType.Inventory2,
+            InventoryType.Inventory3, InventoryType.Inventory4,
             InventoryType.RetainerPage1, InventoryType.RetainerPage2, InventoryType.RetainerPage3,
             InventoryType.RetainerPage4, InventoryType.RetainerPage5, InventoryType.RetainerPage6,
             InventoryType.RetainerPage7,
-            InventoryType.Inventory1, InventoryType.Inventory2,
-            InventoryType.Inventory3, InventoryType.Inventory4,
             InventoryType.SaddleBag1, InventoryType.SaddleBag2,
             InventoryType.PremiumSaddleBag1, InventoryType.PremiumSaddleBag2,
         };

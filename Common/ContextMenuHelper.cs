@@ -26,7 +26,10 @@ public static unsafe class ContextMenuHelper
         return -1;
     }
 
-    /// <summary>AtkValue から表示テキストを抽出。String / ManagedString / String8 等を吸収。</summary>
+    /// <summary>
+    /// AtkValue から表示テキストを抽出。ManagedString は SeString として
+    /// 読み取らないと payload (制御コード等) のせいで PtrToStringUTF8 が壊れる。
+    /// </summary>
     private static string? ExtractText(AtkValue v)
     {
         switch (v.Type)
@@ -36,7 +39,15 @@ public static unsafe class ContextMenuHelper
             case AtkValueType.ManagedString:
             case AtkValueType.Managed:
                 if (v.String.Value == null) return null;
-                return System.Runtime.InteropServices.Marshal.PtrToStringUTF8((nint)v.String.Value);
+                try
+                {
+                    var seStr = Dalamud.Memory.MemoryHelper.ReadSeStringNullTerminated((nint)v.String.Value);
+                    return seStr.TextValue;
+                }
+                catch
+                {
+                    return System.Runtime.InteropServices.Marshal.PtrToStringUTF8((nint)v.String.Value);
+                }
             default:
                 return null;
         }
