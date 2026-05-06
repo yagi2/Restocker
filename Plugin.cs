@@ -36,6 +36,7 @@ public sealed class Plugin : IDalamudPlugin
     public readonly WindowSystem WindowSystem = new("Restocker");
 
     private MainWindow MainWindow { get; }
+    private ProgressWindow ProgressWindow { get; }
     private BellWatcher BellWatcher { get; }
     private AutoRetainerDetector ArDetector { get; }
     private Executor Executor { get; }
@@ -52,6 +53,8 @@ public sealed class Plugin : IDalamudPlugin
 
         MainWindow = new MainWindow(Configuration, Executor, MarketWatcher);
         WindowSystem.AddWindow(MainWindow);
+        ProgressWindow = new ProgressWindow(Executor);
+        WindowSystem.AddWindow(ProgressWindow);
 
         RetainerWatcher = new RetainerWatcher(
             Configuration,

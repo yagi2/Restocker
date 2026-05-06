@@ -151,6 +151,7 @@ public static class Strings
     public static string ColPrice => T("Price", "提示価格", "Preis", "Prix", "价格", "가격");
     public static string ColPlan => T("Plan", "計画", "Plan", "Plan", "计划", "계획");
     public static string ColLotsConfig => T("Qty x Slots", "個数×枠数", "Anz x Plätze", "Qté x Lots", "数量×槽位", "수량×슬롯");
+    public static string QtyMaxTooltip => T("Set qty to min(MaxStack, Owned)", "個数を min(最大スタック, 所持数) にする", "Anz auf min(MaxStack, Bestand) setzen", "Qté = min(MaxStack, Stock)", "设为 min(最大堆叠, 拥有数)", "수량을 min(최대스택, 보유)로 설정");
     public static string ColTarget => T("Target", "出品先", "Ziel", "Cible", "目标", "대상");
     public static string AddToPlan => T("+ Add", "+ 追加", "+ Hinzu", "+ Ajouter", "+ 添加", "+ 추가");
     public static string TargetSelf => T("(self)", "(自身)", "(selbst)", "(soi)", "(本人)", "(자신)");
@@ -158,6 +159,35 @@ public static class Strings
     public static string PendingPlansEmpty => T("No plans yet. Set price/qty/slots/target on a row, then click +Add.", "プランが空です。各行で価格・個数・枠数・出品先を指定し +追加 を押してください。", "Noch keine Pläne. Pro Zeile Preis/Anz/Plätze/Ziel setzen, dann +Hinzu.", "Aucune mise. Renseignez prix/qté/lots/cible puis cliquez +Ajouter.", "暂无计划。在行内设定价格/数量/槽位/目标后点击 +添加。", "계획 없음. 행에 가격/수량/슬롯/대상을 설정한 뒤 +추가.");
     public static string PendingPlanRemove => T("x", "削除", "x", "x", "删除", "삭제");
     public static string ClearAllPlans => T("Clear all", "全消去", "Alle löschen", "Tout effacer", "全部清除", "모두 지움");
+
+    // Progress dialog
+    public static string ProgressMode => T("Mode", "モード", "Modus", "Mode", "模式", "모드");
+    public static string ProgressModeRefresh => T("Refresh all", "全リテイナー更新", "Aktualisieren", "Rafraîchir", "全部刷新", "모두 갱신");
+    public static string ProgressModeApply => T("Apply actions", "アクション実行", "Aktionen anwenden", "Exécuter", "执行操作", "작업 적용");
+    public static string ProgressStep => T("Step", "ステップ", "Schritt", "Étape", "步骤", "단계");
+    public static string ProgressJobs => T("Retainers: {0}/{1}", "リテイナー: {0}/{1}", "Gehilfen: {0}/{1}", "Intendants : {0}/{1}", "雇员: {0}/{1}", "리테이너: {0}/{1}");
+    public static string ProgressActions => T("Actions: {0}/{1}", "操作: {0}/{1}", "Aktionen: {0}/{1}", "Actions : {0}/{1}", "操作: {0}/{1}", "작업: {0}/{1}");
+
+    // Per-state labels
+    public static string StateSelectingRetainer => T("Selecting retainer...", "リテイナーを選択中...", "Wähle Gehilfen...", "Sélection de l'intendant...", "选择雇员中...", "리테이너 선택 중...");
+    public static string StateAwaitingSelectString => T("Waiting for retainer menu...", "リテイナーメニュー待ち...", "Warte auf Menü...", "Attente du menu...", "等待菜单...", "메뉴 대기...");
+    public static string StateOpeningSellList => T("Opening sell list...", "出品リストを開く...", "Öffne Verkaufsliste...", "Ouverture liste de vente...", "打开上架列表...", "판매 목록 여는 중...");
+    public static string StateAwaitingSellList => T("Waiting for sell list...", "出品リストを待機...", "Warte auf Verkaufsliste...", "Attente liste de vente...", "等待上架列表...", "판매 목록 대기...");
+    public static string StatePerformingAction => T("Running listing actions...", "出品アクションを実行中...", "Führe Aktionen aus...", "Exécution des actions...", "执行上架操作...", "작업 실행 중...");
+    public static string StateAwaitingContextMenu => T("Waiting for context menu...", "コンテキストメニュー待ち...", "Warte auf Kontextmenü...", "Attente menu contextuel...", "等待右键菜单...", "컨텍스트 메뉴 대기...");
+    public static string StateClickingPutUpForSale => T("Selecting 'Put up for sale'...", "「マーケットに出品」を選択中...", "Wähle 'Anbieten'...", "Sélection 'Mettre en vente'...", "选择「市场出售」...", "「시장 등록」 선택 중...");
+    public static string StateReadingPrices => T("Reading current prices...", "現在価格を読み取り中...", "Lese aktuelle Preise...", "Lecture des prix...", "读取当前价格...", "현재 가격 읽는 중...");
+    public static string StateAwaitingSellDialog => T("Waiting for sell dialog...", "出品ダイアログを待機...", "Warte auf Dialog...", "Attente boîte de vente...", "等待价格对话框...", "판매 대화상자 대기...");
+    public static string StateConfirmingSellDialog => T("Confirming listing...", "出品を確定中...", "Bestätige Posten...", "Confirmation...", "确认上架...", "등록 확정 중...");
+    public static string StateAwaitingSaddleMove => T("Waiting for saddlebag→bag move...", "サドル→所持品の反映待ち...", "Warte auf Sattel→Tasche...", "Attente sacoche→sac...", "等待马鞍→背包...", "안장→가방 이동 대기...");
+    public static string StatePreStagingSaddle => T("Pre-staging saddlebag items to bag...", "サドルから所持品にステージング中...", "Bereite Sattel-Items vor...", "Préparation depuis sacoche...", "从马鞍预转入背包...", "안장→가방 사전 이동...");
+    public static string StateAwaitingNewListing => T("Waiting for listing to land...", "出品反映を待機中...", "Warte auf Server-Bestätigung...", "Attente confirmation serveur...", "等待服务器确认...", "서버 반영 대기...");
+    public static string StateFetchAwaitingMarketData => T("Reading market data...", "マーケット相場を取得中...", "Lese Marktdaten...", "Lecture du marché...", "读取市场数据...", "시장 데이터 조회 중...");
+    public static string StateClosingSellList => T("Closing sell list...", "出品リストを閉じています...", "Schließe Liste...", "Fermeture...", "关闭上架列表...", "판매 목록 닫는 중...");
+    public static string StateDismissingRetainer => T("Dismissing retainer...", "リテイナーを帰しています...", "Entlasse Gehilfen...", "Renvoi de l'intendant...", "送回雇员...", "리테이너 해산...");
+    public static string StateAwaitingDismissed => T("Waiting for dismissal...", "退出待ち...", "Warte auf Entlassung...", "Attente fermeture...", "等待离开...", "퇴장 대기...");
+    public static string StateDone => T("Done", "完了", "Fertig", "Terminé", "完成", "완료");
+    public static string StateStopped => T("Stopped", "停止", "Gestoppt", "Arrêté", "已停止", "정지");
     public static string ListableOnly => T("Listable only", "出品可能アイテムのみ", "Nur einstellbare", "Vendables uniquement", "仅可上架", "등록 가능만");
     public static string Unsellable => T(" (not listable)", "（出品不可）", " (nicht einstellbar)", " (non vendable)", "（不可上架）", "（등록 불가）");
     public static string PlanCount => T("{0} listings", "{0}件", "{0} Posten", "{0} mises", "{0} 项", "{0}건");

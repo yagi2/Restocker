@@ -396,39 +396,35 @@ public sealed class ListTab
         var qty = editedQtyPer[key];
         var slots = editedSlots[key];
 
-        ImGui.SetNextItemWidth(50);
+        // 「個数」InputInt + "MAX" (個数のみ) + "x" + 「枠数」InputInt
+        // 枠数 MAX は target retainer の空き枠依存で行毎に変わるため、UI 上は手入力で。
+        ImGui.SetNextItemWidth(46);
         if (ImGui.InputInt($"##qty-{key}", ref qty, 0))
         {
             if (qty < 0) qty = 0;
             if (qty > r.MaxStack) qty = r.MaxStack;
             editedQtyPer[key] = qty;
         }
+        ImGui.SameLine(0, 2);
+        var maxDisabled = r.Qty <= 0;
+        if (maxDisabled) ImGui.BeginDisabled();
+        if (ImGui.SmallButton($"M##max-{key}"))
+        {
+            editedQtyPer[key] = System.Math.Min(r.MaxStack, r.Qty);
+        }
+        if (maxDisabled) ImGui.EndDisabled();
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip(Strings.QtyMaxTooltip);
+
         ImGui.SameLine(0, 4);
         ImGui.TextUnformatted("x");
         ImGui.SameLine(0, 4);
-        ImGui.SetNextItemWidth(50);
+        ImGui.SetNextItemWidth(46);
         if (ImGui.InputInt($"##slots-{key}", ref slots, 0))
         {
             if (slots < 0) slots = 0;
             if (slots > Planner.MaxListingSlots) slots = Planner.MaxListingSlots;
             editedSlots[key] = slots;
         }
-
-        ImGui.SameLine(0, 4);
-        var maxDisabled = r.Qty <= 0;
-        if (maxDisabled) ImGui.BeginDisabled();
-        if (ImGui.SmallButton($"MAX##max-{key}"))
-        {
-            var qPer = System.Math.Min(r.MaxStack, r.Qty);
-            if (qPer < 1) qPer = r.MaxStack;
-            var freeSlots = ResolveFreeListingSlots(sourceKey, key);
-            var neededSlots = qPer > 0 ? (r.Qty + qPer - 1) / qPer : 0;
-            var targetSlots = System.Math.Min(freeSlots, neededSlots);
-            if (targetSlots < 0) targetSlots = 0;
-            editedQtyPer[key] = qPer;
-            editedSlots[key] = targetSlots;
-        }
-        if (maxDisabled) ImGui.EndDisabled();
     }
 
     /// <summary>retainer source は「(自身)」表示、char source は target retainer の Combo。</summary>
