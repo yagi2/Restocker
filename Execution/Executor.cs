@@ -494,21 +494,44 @@ public sealed unsafe class Executor : IDisposable
 
     private void TickAwaitingContextMenu()
     {
-        if (!AddonHelper.IsOpen("ContextMenu")) return;
+        if (!AddonHelper.IsOpen("ContextMenu"))
+        {
+            if (waitingSince == null) waitingSince = DateTime.UtcNow;
+            else if (DateTime.UtcNow - waitingSince.Value > TimeSpan.FromSeconds(3))
+            {
+                log.Warning("[Restocker] ContextMenu didn't appear after OpenForItemSlot");
+                Stop("context menu did not open");
+            }
+            return;
+        }
+        waitingSince = null;
         State = ExecutionState.ClickingPutUpForSale;
         Throttle();
     }
 
     private void TickClickingPutUpForSale()
     {
-        if (!ContextMenuHelper.ClickEntry(AddonText.IsPutUpForSaleEntry)) return;
-        // FetchMarketPriceViaInventory なら ComparePrices 経路へ、
-        // 通常の NewListing なら価格/数量入力 → Confirm 経路へ。
-        var nextKind = currentJobActions.Count > 0 ? currentJobActions.Peek().Kind : PlannedActionKind.NewListing;
-        State = nextKind == PlannedActionKind.FetchMarketPriceViaInventory
-            ? ExecutionState.FetchAwaitingSellDialog
-            : ExecutionState.AwaitingSellDialog;
-        Throttle();
+        if (waitingSince == null) waitingSince = DateTime.UtcNow;
+        if (ContextMenuHelper.ClickEntry(AddonText.IsPutUpForSaleEntry))
+        {
+            waitingSince = null;
+            // FetchMarketPriceViaInventory なら ComparePrices 経路へ、
+            // 通常の NewListing なら価格/数量入力 → Confirm 経路へ。
+            var nextKind = currentJobActions.Count > 0 ? currentJobActions.Peek().Kind : PlannedActionKind.NewListing;
+            State = nextKind == PlannedActionKind.FetchMarketPriceViaInventory
+                ? ExecutionState.FetchAwaitingSellDialog
+                : ExecutionState.AwaitingSellDialog;
+            Throttle();
+            return;
+        }
+        // テキスト一致でクリックできなかった: timeout でエントリ列を dump して諦める
+        if (DateTime.UtcNow - waitingSince!.Value > TimeSpan.FromSeconds(3))
+        {
+            var entries = ContextMenuHelper.EnumerateEntries();
+            log.Warning($"[Restocker] put-up-for-sale entry not found in ContextMenu. Entries: {string.Join(" | ", entries)}");
+            ContextMenuHelper.Close();
+            Stop("put-up-for-sale entry not found in ContextMenu (see /xllog)");
+        }
     }
 
     /// <summary>
@@ -572,7 +595,7 @@ public sealed unsafe class Executor : IDisposable
         // usedMarketSlots に入っているスロットは「ついさっき使った」のでサーバ反映前
         // でもターゲットしないことで swap 動作を防ぐ。
         var market = im->GetInventoryContainer(InventoryType.RetainerMarket);
-        if (market == null || !market->IsLoaded) return false;
+        if (market == null) return false;
         var dstSlot = -1;
         for (var i = 0; i < market->Size; i++)
         {
@@ -589,7 +612,7 @@ public sealed unsafe class Executor : IDisposable
         foreach (var t in candidates)
         {
             var c = im->GetInventoryContainer(t);
-            if (c == null || !c->IsLoaded) continue;
+            if (c == null) continue;
             for (var i = 0; i < c->Size; i++)
             {
                 var item = c->GetInventorySlot(i);
@@ -702,106 +725,75 @@ public sealed unsafe class Executor : IDisposable
     };
 
     /// <summary>
-    /// サドル → キャラバッグ への **bulk staging**。
-    /// この (sourceKey, itemId, isHQ) のキューに残っている全アクションが必要とする
-    /// 合計 qty をまとめて事前にキャラバッグへ移す。SplitItem は使わず、
-    /// 該当アイテムを持つ saddle slot を whole で MoveItemSlot していく。
-    /// 既にキャラバッグに必要数あれば false (no-op)。
+    /// サドル → キャラバッグへ **1 action ぶんだけ** スレッディングする。
+    /// 連続発射するとサーバ反映が間に合わず IsLoaded フリッピングして
+    /// 同じ saddle slot を再ターゲットしてしまうため、per-action にする。
+    /// 1 saddle slot を 1 char bag 空きスロットへ MoveItemSlot するだけ。
     /// </summary>
     private bool TryStageSaddleToCharBag(PlannedAction action)
     {
         var im = InventoryManager.Instance();
         if (im == null) return false;
 
-        // 1) この source / item / hq に対する total needed を queue から計算
-        long totalNeeded = 0;
-        foreach (var a in currentJobActions)
-        {
-            if (a.Kind != PlannedActionKind.NewListing) continue;
-            if (a.ItemId != action.ItemId) continue;
-            if (a.IsHQ != action.IsHQ) continue;
-            if (a.SourceKey != action.SourceKey) continue;
-            totalNeeded += a.Quantity;
-        }
-        if (totalNeeded <= 0) return false;
-
-        // 2) 既にキャラバッグにある量を集計
-        long inCharBag = 0;
-        foreach (var t in CharBagContainers)
-        {
-            var c = im->GetInventoryContainer(t);
-            if (c == null || !c->IsLoaded) continue;
-            for (var i = 0; i < c->Size; i++)
-            {
-                var it = c->GetInventorySlot(i);
-                if (it == null || it->ItemId != action.ItemId) continue;
-                var hq = (it->Flags & InventoryItem.ItemFlags.HighQuality) != 0;
-                if (hq != action.IsHQ) continue;
-                inCharBag += it->Quantity;
-            }
-        }
-        if (inCharBag >= totalNeeded) return false; // 充足済み、staging 不要
-
-        var remaining = totalNeeded - inCharBag;
-
-        // 3) saddle slot を whole で char bag の空きスロットへ。
-        //    必要数を満たすまで複数 slot を順に動かす。
-        var anyMoved = false;
-        long movedTotal = 0;
+        // 1) 該当アイテムを持つ saddle slot を 1 つ探す (qty>0、HQ 一致)
+        var saddleType = (InventoryType)0;
+        var saddleSlot = -1;
+        var saddleQty = 0;
         foreach (var t in SaddleContainers)
         {
             var c = im->GetInventoryContainer(t);
             if (c == null) continue;
             for (var i = 0; i < c->Size; i++)
             {
-                if (movedTotal >= remaining) break;
                 var item = c->GetInventorySlot(i);
                 if (item == null || item->ItemId != action.ItemId) continue;
                 var hq = (item->Flags & InventoryItem.ItemFlags.HighQuality) != 0;
                 if (hq != action.IsHQ) continue;
                 if (item->Quantity == 0) continue;
-
-                // 空きキャラバッグスロットを探す
-                var freeBagType = (InventoryType)0;
-                var freeBagSlot = -1;
-                foreach (var bt in CharBagContainers)
-                {
-                    var bc = im->GetInventoryContainer(bt);
-                    if (bc == null || !bc->IsLoaded) continue;
-                    for (var bi = 0; bi < bc->Size; bi++)
-                    {
-                        var bit = bc->GetInventorySlot(bi);
-                        if (bit != null && bit->ItemId == 0)
-                        {
-                            freeBagType = bt;
-                            freeBagSlot = bi;
-                            break;
-                        }
-                    }
-                    if (freeBagSlot >= 0) break;
-                }
-                if (freeBagSlot < 0)
-                {
-                    log.Warning("[Restocker] saddle bulk-stage: no free char bag slot, stopping early");
-                    return anyMoved;
-                }
-
-                var qty = item->Quantity;
-                var ret = im->MoveItemSlot(t, (ushort)i,
-                    freeBagType, (ushort)freeBagSlot, false);
-                log.Information($"[Restocker] bulk-stage saddle {t}#{i}({qty}) → char {freeBagType}#{freeBagSlot} ret={ret}");
-                anyMoved = true;
-                movedTotal += qty;
+                saddleType = t;
+                saddleSlot = i;
+                saddleQty = (int)item->Quantity;
+                break;
             }
-            if (movedTotal >= remaining) break;
+            if (saddleSlot >= 0) break;
+        }
+        if (saddleSlot < 0)
+        {
+            log.Warning($"[Restocker] saddle stage: no saddle slot has item={action.ItemId} hq={action.IsHQ}");
+            return false;
         }
 
-        if (!anyMoved)
+        // 2) 空きキャラバッグスロットを探す
+        var bagType = (InventoryType)0;
+        var bagSlot = -1;
+        foreach (var bt in CharBagContainers)
         {
-            log.Warning($"[Restocker] saddle bulk-stage: no saddle slot has item={action.ItemId} hq={action.IsHQ}");
+            var bc = im->GetInventoryContainer(bt);
+            if (bc == null) continue;
+            for (var bi = 0; bi < bc->Size; bi++)
+            {
+                var bit = bc->GetInventorySlot(bi);
+                if (bit != null && bit->ItemId == 0)
+                {
+                    bagType = bt;
+                    bagSlot = bi;
+                    break;
+                }
+            }
+            if (bagSlot >= 0) break;
         }
+        if (bagSlot < 0)
+        {
+            log.Warning("[Restocker] saddle stage: no free char bag slot");
+            return false;
+        }
+
+        // 3) 1 saddle slot 丸ごと → char bag 空きスロットへ
+        var ret = im->MoveItemSlot(saddleType, (ushort)saddleSlot,
+            bagType, (ushort)bagSlot, false);
+        log.Information($"[Restocker] stage saddle {saddleType}#{saddleSlot}({saddleQty}) → char {bagType}#{bagSlot} ret={ret}");
         waitingSince = null;
-        return anyMoved;
+        return true;
     }
 
     // ---------------- FetchMarketPrice flow ----------------
@@ -873,7 +865,7 @@ public sealed unsafe class Executor : IDisposable
         foreach (var t in CharBagContainers)
         {
             var c = im->GetInventoryContainer(t);
-            if (c == null || !c->IsLoaded) continue;
+            if (c == null) continue;
             for (var i = 0; i < c->Size; i++)
             {
                 var item = c->GetInventorySlot(i);
