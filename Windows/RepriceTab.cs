@@ -48,11 +48,6 @@ public sealed class RepriceTab
         ImGui.SetNextItemWidth(240);
         ImGui.InputTextWithHint("##reprice-filter", Strings.Filter, ref filter, 64);
         ImGui.SameLine();
-        if (ImGui.Button(Strings.RepriceMatchLowest))
-        {
-            ApplyMatchLowest();
-        }
-        ImGui.SameLine();
         if (ImGui.SmallButton(Strings.CollapseAll + "##reprice-collapse"))
         {
             expandedSections.Clear();
@@ -71,48 +66,6 @@ public sealed class RepriceTab
         {
             ImGui.TextColored(new System.Numerics.Vector4(0.85f, 0.85f, 0.4f, 1f), lastMatchSummary);
         }
-    }
-
-    /// <summary>
-    /// 表示中の listing を集約 → 各 (ItemId, IsHQ) について 1 回だけ MarketCache を引く →
-    /// 外れ値除外つき最安値 - 1 ギルを当該 listing の editedPrice にセット。
-    /// MarketCache に未登録の item は missing リストにまとめてユーザーに通知。
-    /// </summary>
-    private void ApplyMatchLowest()
-    {
-        var seen = new HashSet<(uint, bool)>();
-        var missing = new HashSet<(uint, bool, string)>();
-        var applied = 0;
-        var sheet = Plugin.DataManager.GetExcelSheet<Item>();
-
-        foreach (var snap in configuration.Snapshots.Values)
-        {
-            foreach (var listing in snap.Listings)
-            {
-                var itemName = sheet.TryGetRow(listing.ItemId, out var row) ? row.Name.ExtractText() : $"#{listing.ItemId}";
-                if (listing.IsHQ) itemName += " (HQ)";
-                if (filter.Length > 0 && !itemName.Contains(filter, System.StringComparison.OrdinalIgnoreCase)) continue;
-
-                var key = (listing.ItemId, listing.IsHQ);
-                seen.Add(key);
-                if (!marketCache.HasData(listing.ItemId, listing.IsHQ))
-                {
-                    missing.Add((listing.ItemId, listing.IsHQ, itemName));
-                    continue;
-                }
-                var lowest = marketCache.GetLowest(listing.ItemId, listing.IsHQ);
-                if (lowest <= 1) continue;
-                var newPrice = lowest - 1;
-                editedPrice[$"{snap.Key}#{listing.ListingIndex}"] = newPrice;
-                applied++;
-            }
-        }
-
-        if (missing.Count == 0)
-            lastMatchSummary = string.Format(Strings.MatchAppliedSummary, applied, seen.Count);
-        else
-            lastMatchSummary = string.Format(Strings.MatchAppliedSummaryWithMissing, applied, seen.Count, missing.Count,
-                string.Join(", ", missing.Take(5).Select(m => m.Item3)) + (missing.Count > 5 ? "…" : ""));
     }
 
     private void DrawApplyButton()

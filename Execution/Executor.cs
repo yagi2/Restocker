@@ -660,7 +660,7 @@ public sealed unsafe class Executor : IDisposable
         // RetainerSellList の listing クリック: Callback.Fire(addon, true, 0, slot)
         // （ECommons の AddonRetainerSellList wrapper に準ずる）
         Callback.Fire(addon, true, 0, (uint)slot);
-        log.Debug($"[Restocker] click listing slot {slot}");
+        log.Information($"[Restocker] click listing slot {slot} on RetainerSellList");
     }
 
     private void TickAwaitingSellDialog()
@@ -1034,12 +1034,37 @@ public sealed unsafe class Executor : IDisposable
     private void TickFetchAwaitingSellDialog()
     {
         var addon = AddonHelper.GetVisible("RetainerSell");
-        if (addon == null) return;
+        if (addon == null)
+        {
+            // タイムアウト: listing slot click が反映されず RetainerSell が開かない
+            // ケースの保険。SellList でフォーカスが外れているとクリックが効かないことが
+            // あるため、再 click を 1 回だけ試みた上でダメなら諦めて次の action へ進む。
+            if (waitingSince == null) waitingSince = DateTime.UtcNow;
+            var elapsed = DateTime.UtcNow - waitingSince.Value;
+            if (elapsed > TimeSpan.FromSeconds(2.5) && elapsed < TimeSpan.FromSeconds(2.6))
+            {
+                var action = currentJobActions.Peek();
+                log.Warning($"[Restocker] RetainerSell did not open within 2.5s after slot click; retrying click on slot {action.ListingIndex}");
+                ClickListingSlot(action.ListingIndex);
+            }
+            if (elapsed > TimeSpan.FromSeconds(6))
+            {
+                var action = currentJobActions.Peek();
+                log.Warning($"[Restocker] RetainerSell never opened for item={action.ItemId} hq={action.IsHQ} slot={action.ListingIndex}, skipping. (RetainerSellList open={AddonHelper.IsOpen("RetainerSellList")})");
+                currentJobActions.Dequeue();
+                CompletedActions++;
+                waitingSince = null;
+                State = ExecutionState.PerformingAction;
+                Throttle();
+            }
+            return;
+        }
+        waitingSince = null;
 
-        var action = currentJobActions.Peek();
+        var act = currentJobActions.Peek();
         // ComparePrices を click。AddonRetainerSell の event id 4 (Marketbuddy 慣例)
         Callback.Fire(addon, true, 4);
-        log.Information($"[Restocker] clicked ComparePrices for item={action.ItemId} hq={action.IsHQ} (slot={action.ListingIndex})");
+        log.Information($"[Restocker] clicked ComparePrices for item={act.ItemId} hq={act.IsHQ} (slot={act.ListingIndex})");
         State = ExecutionState.FetchAwaitingMarketData;
         waitingSince = DateTime.UtcNow;
         Throttle();
