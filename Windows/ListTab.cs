@@ -569,23 +569,10 @@ public sealed class ListTab
 
     private void ApplyOrFetchAndApply(uint itemId, bool isHQ, string priceKey, long offset)
     {
-        if (marketCache.HasData(itemId, isHQ))
-        {
-            var lowest = marketCache.GetLowest(itemId, isHQ);
-            if (lowest > 0)
-            {
-                var p = lowest + offset;
-                if (p <= 0) p = 1;
-                editedPrice[priceKey] = p;
-            }
-            return;
-        }
-
-        // priceKey は "{sourceKey}#{itemId}.{hq}"。ContextMenu 経由 fetch は
-        // 環境によって動かない (現在の FFXIV では右クリックに「マーケットに出品」が
-        // 出ないことがある) ため、まずは「現在開いているリテイナーの出品中スロット」
-        // 経由で fetch を試みる。
-        Plugin.Log.Information($"[Restocker] fetch market price for item={itemId} hq={isHQ} priceKey={priceKey}");
+        // ユーザー要望: 最安/-1g は **常に最新のマーケット相場を確認** してから
+        // 適用する。古い cache を使うと「最安」と称して過去の値段が入ってしまうため。
+        // よって cache 早期リターンは行わない。
+        Plugin.Log.Information($"[Restocker] fetch market price (always fresh) for item={itemId} hq={isHQ} priceKey={priceKey}");
 
         executor.OnFetchMarketCompleted = () =>
         {
